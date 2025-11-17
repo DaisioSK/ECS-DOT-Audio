@@ -40,4 +40,12 @@ def export_mel_to_wav(mel_path: Path,
     return out_path
 
 
-__all__ = ["mel_db_to_waveform", "export_mel_to_wav"]
+def infer_base_mel_path(path: Path, clip_id: str, window_id: str) -> Path:
+    """Infer the base (non-augmented) mel path for a given clip/window."""
+    if not clip_id or not window_id:
+        return path
+    base_name = f"{clip_id}_base_{window_id}.npy"
+    return path.with_name(base_name)
+
+
+__all__ = ["mel_db_to_waveform", "export_mel_to_wav", "infer_base_mel_path"]

@@ -36,6 +36,8 @@ class CacheEntry:
     label: str
     fold_id: int
     source_filename: str
+    clip_id: str
+    window_id: str
     pipeline_name: str
     augment_desc: str
 
@@ -78,12 +80,18 @@ def _cache_glass_row(row: pd.Series,
                      cache_dir: Path,
                      align_labels: Sequence[str],
                      extra_shifts: Sequence[float] | None,
+                     energy_threshold: float,
+                     peak_ratio_threshold: float,
+                     front_peak_ratio: float,
                      rng: np.random.Generator) -> List[CacheEntry]:
     """Cache base and augmented windows for a glass-breaking clip."""
     windows = generate_aligned_windows(
         row,
         align_labels=list(align_labels),
         extra_shifts=list(extra_shifts) if extra_shifts else None,
+        energy_threshold=energy_threshold,
+        peak_ratio_threshold=peak_ratio_threshold,
+        front_peak_ratio=front_peak_ratio,
     )
     clip_id = Path(row["filename"]).stem
     fold_id = int(row.get("fold_id", -1))
@@ -99,6 +107,8 @@ def _cache_glass_row(row: pd.Series,
                 label=label,
                 fold_id=fold_id,
                 source_filename=row["filename"],
+                clip_id=clip_id,
+                window_id=f"w{win_idx:02d}",
                 pipeline_name="base",
                 augment_desc="base",
             )
@@ -127,6 +137,8 @@ def _cache_glass_row(row: pd.Series,
                         label=label,
                         fold_id=fold_id,
                         source_filename=row["filename"],
+                        clip_id=clip_id,
+                        window_id=f"w{win_idx:02d}",
                         pipeline_name=pipeline_name,
                         augment_desc=augmented.description,
                     )
@@ -136,9 +148,10 @@ def _cache_glass_row(row: pd.Series,
 
 def _cache_background_row(row: pd.Series,
                           cache_dir: Path,
-                          align_labels: Sequence[str]) -> List[CacheEntry]:
+                          align_labels: Sequence[str],
+                          energy_threshold: float) -> List[CacheEntry]:
     """Cache sliding-window mel tiles for a background clip."""
-    windows = generate_aligned_windows(row, align_labels=list(align_labels))
+    windows = generate_aligned_windows(row, align_labels=list(align_labels), energy_threshold=energy_threshold)
     clip_id = Path(row["filename"]).stem
     fold_id = int(row.get("fold_id", -1))
     label = row["target_label"]
@@ -152,6 +165,8 @@ def _cache_background_row(row: pd.Series,
                 label=label,
                 fold_id=fold_id,
                 source_filename=row["filename"],
+                clip_id=clip_id,
+                window_id=f"w{win_idx:02d}",
                 pipeline_name="base",
                 augment_desc="base",
             )
@@ -164,6 +179,9 @@ def build_cache_index(dataset_df: pd.DataFrame,
                       cache_dir: Path = CACHE_DIR,
                       align_labels: Sequence[str] | None = None,
                       extra_shifts: Sequence[float] | None = None,
+                      energy_threshold: float = 0.2,
+                      peak_ratio_threshold: float = 0.7,
+                      front_peak_ratio: float = 0.5,
                       seed: int = SEED) -> pd.DataFrame:
     """Generate mel cache for entire dataset and return metadata index."""
     align_labels = align_labels or GLASS_LABELS
@@ -182,6 +200,9 @@ def build_cache_index(dataset_df: pd.DataFrame,
                     cache_dir=cache_dir,
                     align_labels=align_labels,
                     extra_shifts=extra_shifts,
+                    energy_threshold=energy_threshold,
+                    peak_ratio_threshold=peak_ratio_threshold,
+                    front_peak_ratio=front_peak_ratio,
                     rng=rng,
                 )
             )
@@ -191,6 +212,7 @@ def build_cache_index(dataset_df: pd.DataFrame,
                     row,
                     cache_dir=cache_dir,
                     align_labels=align_labels,
+                    energy_threshold=energy_threshold,
                 )
             )
     index_df = pd.DataFrame([asdict(entry) for entry in entries])

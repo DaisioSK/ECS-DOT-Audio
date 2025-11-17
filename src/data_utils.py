@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -75,16 +75,25 @@ def log_mel_spectrogram(y: np.ndarray,
     return librosa.power_to_db(mel, ref=np.max)
 
 
-def sliding_windows(y: np.ndarray, sr: int,
-                    window_seconds: float = WINDOW_SECONDS,
-                    hop_seconds: float = WINDOW_HOP) -> Iterable[np.ndarray]:
+def _iter_windows(y: np.ndarray,
+                  sr: int,
+                  window_seconds: float = WINDOW_SECONDS,
+                  hop_seconds: float = WINDOW_HOP) -> Iterable[Tuple[np.ndarray, int]]:
     """Yield fixed-length waveform segments using sliding-window slicing."""
     window_len = int(window_seconds * sr)
     hop_len = int(hop_seconds * sr)
     if len(y) < window_len:
         y = np.pad(y, (0, window_len - len(y)))
     for start in range(0, len(y) - window_len + 1, hop_len):
-        yield y[start:start + window_len]
+        yield y[start:start + window_len], start
+
+
+def sliding_windows(y: np.ndarray, sr: int,
+                    window_seconds: float = WINDOW_SECONDS,
+                    hop_seconds: float = WINDOW_HOP) -> Iterable[np.ndarray]:
+    """Public window generator (without returning offsets)."""
+    for window, _ in _iter_windows(y, sr, window_seconds, hop_seconds):
+        yield window
 
 
 def center_peak_window(y: np.ndarray,
@@ -108,21 +117,58 @@ def center_peak_window(y: np.ndarray,
     return window
 
 
+def _energy_mask(y: np.ndarray,
+                 sr: int,
+                 window_seconds: float,
+                 hop_seconds: float,
+                 threshold_ratio: float) -> np.ndarray:
+    """Return boolean mask per window indicating if average energy exceeds threshold."""
+    hop_len = int(hop_seconds * sr)
+    frame_length = min(int(window_seconds * sr), 2048)
+    rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_len)[0]
+    if rms.size == 0 or rms.max() <= 0:
+        return np.ones(rms.shape, dtype=bool)
+    energy = rms / rms.max()
+    return energy > threshold_ratio
+
+
 def generate_aligned_windows(row: pd.Series,
                              align_labels: List[str],
-                             extra_shifts: List[float] | None = None) -> List[np.ndarray]:
-    """Produce waveform windows for a row, aligning positives to peak."""
+                             extra_shifts: List[float] | None = None,
+                             energy_threshold: float = 0.2,
+                             peak_ratio_threshold: float = 0.7,
+                             front_peak_ratio: float = 0.5) -> List[np.ndarray]:
+    """Produce waveform windows for a row with energy filtering."""
     y, sr = load_audio(row)
     label = row['target_label']
     windows: List[np.ndarray] = []
     if label in align_labels:
-        shifts = [0.0]
-        if extra_shifts:
-            shifts.extend(extra_shifts)
-        for shift in shifts:
-            windows.append(center_peak_window(y, sr, shift_seconds=shift))
+        energy_global = np.max(y ** 2) + 1e-8
+        for window, _ in _iter_windows(y, sr):
+            energy = window ** 2
+            peak_idx = int(np.argmax(energy))
+            peak_ratio = energy[peak_idx] / energy_global
+            peak_position = peak_idx / max(len(window), 1)
+            if peak_ratio < peak_ratio_threshold:
+                continue
+            if peak_position > front_peak_ratio:
+                continue
+            windows.append(window)
+        if not windows:
+            shifts = [0.0]
+            if extra_shifts:
+                shifts.extend(extra_shifts)
+            for shift in shifts:
+                windows.append(center_peak_window(y, sr, shift_seconds=shift))
+                break
     else:
-        windows.extend(list(sliding_windows(y, sr)))
+        mask = _energy_mask(y, sr, WINDOW_SECONDS, WINDOW_HOP, energy_threshold)
+        for idx, (window, _) in enumerate(_iter_windows(y, sr)):
+            if idx < len(mask) and not mask[idx]:
+                continue
+            windows.append(window)
+        if not windows:
+            windows.append(center_peak_window(y, sr))
     return windows
 
 
