@@ -58,3 +58,56 @@
 - **增强配置管理**：将 `GLASS_PIPELINE_PLAN`、阈值等抽到 YAML/JSON，便于不同实验切换。
 - **更丰富的 QA**：可选将原始 WAV 同步裁剪输出，方便肉耳对照；若需更高保真，可增加 Griffin-Lim 迭代或提升 mel 维度。
 - **自动化脚本**：把 smoke/full 缓存、QA 抽样流程封装成 CLI，方便批处理或 CI 运行。
+
+
+## 2025-11-15 Session (Capstone 数据准备收官)
+
+### TL;DR
+- `train.ipynb` 更名为 `prepare.ipynb`，专注数据准备；未来训练 Notebook 从输出索引起步。
+- 数据管线升级：1s/0.5s 窗 + 80% 峰值阈值、六种增强组合、受控混音、背景池与 fold balancing。
+- 新增 `src/datasets.py`（`balance_folds`, `MelDataset`）；Notebook 展示 base summary、fold 统计、背景 QA，支持导出 `balanced_index`。
+- 环境修复：Dockerfile 锁 `numpy<2`、安装 `pyarrow`，解决 torch/Numpy 与 parquet 兼容。
+
+### 项目状态
+- **环境**：Docker image 含 PyTorch CPU 栈、numpy<2、pyarrow；`env.mk` 仍负责 build/run/notebook/test。
+- **模块**：`src/data_utils`(峰值筛选)、`augement`/`augment_pipeline`(6 组合 + shift/mix 控制)、`cache_utils`(`source_type` + background pool)、`audio_qc`、`datasets`。
+- **prepare.ipynb**：导入/配置覆盖 → 数据加载/Fold → 可视化 → 能量分析 → base summary → 增强 demo → 缓存 smoke/full → QA(base/aug/background) → fold balancing & dataset preview → balanced index 导出。
+- **产物**：`cache/mel64/*.npy` + QA wav，`balanced_index_df` (CSV/Parquet)，供 `train.ipynb` 使用。
+
+### 本次完成
+1. Notebook 拆分 + 重命名，明确 prepare vs train 的职责。
+2. 增强/缓存改进：shift 保留峰值、mix 使用正 SNR 和功率限制；PIPELINE_PLAN 扩展 6 组合（每 base 10 个增强）；背景池机制避免重复。
+3. Base summary & QA：记录 offsets/总数，新增背景试听单元。
+4. Dataset & Fold balancing：`balance_folds` 默认玻璃约 40%；`MelDataset` 负责加载 mel `.npy`。
+5. Balanced index 导出：示例 `balanced_index_df.to_parquet('cache/index_balanced.parquet')`，train Notebook 直接读取。
+6. 环境修复：Dockerfile 添加 `numpy<2`、`pyarrow`，避免 torch/Numpy 报错。
+
+### 关键改动
+- `augment.py`: `augment_time_shift` 零填充 + 限制峰位置；`mix_with_background` SNR=(3,9) & bg_max=0.1。
+- `augment_pipeline.py`: 注册 6 种组合（shift_gain/stretch_reverb/shift_mix/filter_gain/gain_mix/stretch_filter）。
+- `cache_utils.py`: `CacheEntry` 加 `clip_id/window_id/source_type`；背景窗全部入池，比例由 `balance_folds` 控制。
+- `prepare.ipynb`: 配置打印、base summary（含总数/offset）、fold balancing & Dataset preview、背景 QA。
+- `src/datasets.py`: `balance_folds` 调整玻璃:背景≈40:60；`MelDataset` 加载 mel `.npy`。
+- `Dockerfile`: 加 `pyarrow`、锁 `numpy<2`。
+
+### 使用示例
+```bash
+make -f env.mk build
+make -f env.mk notebook
+```
+运行 `prepare.ipynb` → `balanced_index_df.to_parquet('cache/index_balanced.parquet', index=False)`。
+在新的 `train.ipynb`：
+```python
+import pandas as pd
+from src.datasets import MelDataset
+index_df = pd.read_parquet('cache/index_balanced.parquet')
+train_dataset = MelDataset(index_df[index_df['fold_id'].isin([1,2,3,4])])
+val_dataset = MelDataset(index_df[index_df['fold_id']==5])
+```
+
+### TODO / Improvements
+- 训练/验证：构建 CNN Baseline、交叉验证，并在 train Notebook 中记录指标。
+- 量化/ONNX：完成 QAT/PTQ 并导出 INT8 模型。
+- 配置抽象：将窗口、阈值、pipeline copy 等移至 YAML/JSON。
+- 背景池优化：可按类别聚类、设最大样本数。
+- 自动 QA：除音频播放外，可计算 embedding 或 Mel 距离辅助筛查。

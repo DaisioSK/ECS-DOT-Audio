@@ -20,10 +20,12 @@ from .augment_pipeline import PIPELINE_REGISTRY, run_pipeline
 
 # Expose pipeline plan slots so notebooks/scripts can reference them.
 GLASS_PIPELINE_PLAN: Dict[str, Dict[str, int]] = {
-    "shift_gain": {"copies": 3},
+    "shift_gain": {"copies": 2},
     "stretch_reverb": {"copies": 2},
-    "shift_mix": {"copies": 3},
+    "shift_mix": {"copies": 2},
     "filter_gain": {"copies": 2},
+    "gain_mix": {"copies": 1},
+    "stretch_filter": {"copies": 1},
 }
 GLASS_LABELS: List[str] = list(POSITIVE_LABELS.values())
 
@@ -40,6 +42,7 @@ class CacheEntry:
     window_id: str
     pipeline_name: str
     augment_desc: str
+    source_type: str
 
 
 def _save_window(window: np.ndarray,
@@ -83,7 +86,7 @@ def _cache_glass_row(row: pd.Series,
                      energy_threshold: float,
                      peak_ratio_threshold: float,
                      front_peak_ratio: float,
-                     rng: np.random.Generator) -> List[CacheEntry]:
+                     rng: np.random.Generator) -> tuple[List[CacheEntry], int]:
     """Cache base and augmented windows for a glass-breaking clip."""
     windows = generate_aligned_windows(
         row,
@@ -97,6 +100,7 @@ def _cache_glass_row(row: pd.Series,
     fold_id = int(row.get("fold_id", -1))
     label = row["target_label"]
     entries: List[CacheEntry] = []
+    base_count = 0
 
     for win_idx, window in enumerate(windows):
         base_suffix = f"base_w{win_idx:02d}"
@@ -111,8 +115,11 @@ def _cache_glass_row(row: pd.Series,
                 window_id=f"w{win_idx:02d}",
                 pipeline_name="base",
                 augment_desc="base",
+                source_type="glass_base",
             )
         )
+
+        base_count += 1
 
         for pipeline_name, cfg in pipeline_plan.items():
             copies = cfg.get("copies", 1)
@@ -141,9 +148,10 @@ def _cache_glass_row(row: pd.Series,
                         window_id=f"w{win_idx:02d}",
                         pipeline_name=pipeline_name,
                         augment_desc=augmented.description,
+                        source_type="glass_aug",
                     )
                 )
-    return entries
+    return entries, base_count
 
 
 def _cache_background_row(row: pd.Series,
@@ -169,6 +177,7 @@ def _cache_background_row(row: pd.Series,
                 window_id=f"w{win_idx:02d}",
                 pipeline_name="base",
                 augment_desc="base",
+                source_type="background_raw",
             )
         )
     return entries
@@ -180,7 +189,7 @@ def build_cache_index(dataset_df: pd.DataFrame,
                       align_labels: Sequence[str] | None = None,
                       extra_shifts: Sequence[float] | None = None,
                       energy_threshold: float = 0.2,
-                      peak_ratio_threshold: float = 0.7,
+                      peak_ratio_threshold: float = 0.8,
                       front_peak_ratio: float = 0.5,
                       seed: int = SEED) -> pd.DataFrame:
     """Generate mel cache for entire dataset and return metadata index."""
@@ -190,24 +199,27 @@ def build_cache_index(dataset_df: pd.DataFrame,
     rng = np.random.default_rng(seed)
     entries: List[CacheEntry] = []
 
+    background_pool: List[CacheEntry] = []
+    glass_base_count = 0
+
     for _, row in dataset_df.iterrows():
         if row["target_label"] in align_labels:
-            entries.extend(
-                _cache_glass_row(
-                    row,
-                    pipeline_plan=pipeline_plan,
-                    background_df=background_df,
-                    cache_dir=cache_dir,
-                    align_labels=align_labels,
-                    extra_shifts=extra_shifts,
-                    energy_threshold=energy_threshold,
-                    peak_ratio_threshold=peak_ratio_threshold,
-                    front_peak_ratio=front_peak_ratio,
-                    rng=rng,
-                )
+            glass_entries, base_count = _cache_glass_row(
+                row,
+                pipeline_plan=pipeline_plan,
+                background_df=background_df,
+                cache_dir=cache_dir,
+                align_labels=align_labels,
+                extra_shifts=extra_shifts,
+                energy_threshold=energy_threshold,
+                peak_ratio_threshold=peak_ratio_threshold,
+                front_peak_ratio=front_peak_ratio,
+                rng=rng,
             )
+            entries.extend(glass_entries)
+            glass_base_count += base_count
         else:
-            entries.extend(
+            background_pool.extend(
                 _cache_background_row(
                     row,
                     cache_dir=cache_dir,
@@ -215,6 +227,10 @@ def build_cache_index(dataset_df: pd.DataFrame,
                     energy_threshold=energy_threshold,
                 )
             )
+
+    if background_pool:
+        entries.extend(background_pool)
+
     index_df = pd.DataFrame([asdict(entry) for entry in entries])
     return index_df
 

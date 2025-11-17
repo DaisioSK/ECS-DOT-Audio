@@ -36,7 +36,7 @@ RUN pip install --upgrade pip \
         torchaudio==2.2.0+cpu \
         --index-url https://download.pytorch.org/whl/cpu \
     && pip install \
-        numpy \
+        "numpy<2" \
         scipy \
         pandas \
         soundfile \

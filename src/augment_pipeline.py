@@ -22,6 +22,8 @@ PIPELINE_REGISTRY: Dict[str, Sequence[str]] = {
     "stretch_reverb": ("time_stretch", "reverb"),
     "shift_mix": ("time_shift", "mix"),
     "filter_gain": ("filter", "gain"),
+    "gain_mix": ("gain", "mix"),
+    "stretch_filter": ("time_stretch", "filter"),
 }
 
 
