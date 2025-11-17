@@ -1,0 +1,36 @@
+"""Project-wide constants and path helpers."""
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def locate_project_root(start: Path | None = None, marker: str = "data") -> Path:
+    """Walk up directories until a marker folder is found."""
+    start = (start or Path.cwd()).resolve()
+    for path in (start,) + tuple(start.parents):
+        if (path / marker).exists():
+            return path
+    raise FileNotFoundError(f"Could not locate project root from {start}")
+
+
+PROJECT_ROOT = locate_project_root()
+DATA_ROOT = PROJECT_ROOT / "data"
+AUDIO_DIR = DATA_ROOT / "audio"
+META_FILE = DATA_ROOT / "meta" / "esc50.csv"
+CACHE_DIR = PROJECT_ROOT / "cache" / "mel64"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Audio + feature parameters
+SR = 22050
+N_MELS = 64
+N_FFT = 1024
+HOP_LENGTH = 256
+WINDOW_SECONDS = 1.0
+WINDOW_HOP = 0.5
+SEED = 42
+
+POSITIVE_LABELS = {
+    "glass_breaking": "glass_breaking",
+}
+BACKGROUND_LABEL = "background"
+BACKGROUND_MULTIPLIER = 3
