@@ -111,3 +111,77 @@ val_dataset = MelDataset(index_df[index_df['fold_id']==5])
 - 配置抽象：将窗口、阈值、pipeline copy 等移至 YAML/JSON。
 - 背景池优化：可按类别聚类、设最大样本数。
 - 自动 QA：除音频播放外，可计算 embedding 或 Mel 距离辅助筛查。
+
+## 2025-11-17 Session
+
+### 大图位置
+- **Sprint**：Capstone Sprint #2「训练 & 评估」。目标：拿到可用 baseline、补齐评估/导出/推理链路，为 TinyML SoC demo 做准备。
+- **Task**：Task-1 模型/训练模块化；Task-2 K-fold 评估与分析；Task-3 ONNX 导出与环境；Task-4 推理 demo。
+
+### TL;DR
+- 重写训练栈（TinyGlassNet + grad clip + class weight + K-fold），让 baseline 更贴近 MCU 约束且可重复。
+- 自动化评估：运行全量 K-fold，输出指标表/可视化，自动挑选最佳折并导出统一 checkpoint & ONNX。
+- 推理链路 ready：`infer.ipynb` + `src/inference.py` 演示 Torch vs ONNX，方便 QA/调参/现场 demo。
+
+### 项目状态（宏观→微观）
+- **宏观**：数据管线稳定，开始进入“模型训练、评估、导出、推理”闭环；后续重点转向量化与 MCU 验证。
+- **训练组件**：
+  - `src/models.TinyGlassNet`：3×Conv+ReLU+Pool + GAP + FC，参数受控、只用 MCU 支持的算子。
+  - `src/training`：`train_model` + `run_kfold_training`，封装 ReduceLROnPlateau、class weight、grad clipping、lr logging。
+  - `train.ipynb`：仅 orchestrate，执行 K-fold → 可视化 → 选最佳 fold → 混淆矩阵 → checkpoint/ONNX 输出。
+- **推理组件**：
+  - `src/inference.py`：加载 checkpoint/ONNX、批量 mel、Torch/ORT 前向统一接口。
+  - `infer.ipynb`：抽样 mel 样本 → Torch/ONNX 推理 → 概率柱状图 → delta 验证。
+- **环境**：Dockerfile 增装 `onnx`/`onnxruntime`；`.gitignore` 忽略任何 `.ipynb_checkpoints`；容器即可运行训练与推理。
+
+### 本次 Session 达成
+1. 实现 TinyGlassNet + 通用训练/评估模块；训练 loop 支持 LR 调整、Grad Clip、class weight。
+2. 训练 Notebook 改为全 K-fold 流程：指标表/条形图、Loss/F1 曲线、最佳折选取、混淆矩阵。
+3. 自动导出 `tinyglassnet_best.{pt,csv,onnx}`，infer Notebook 默认读取统一文件名。
+4. `infer.ipynb` + `src/inference.py` 完成 Torch/ONNX 推理示例、概率可视化；用于 smoke/demo。
+5. Dockerfile 加载 onnx 依赖，推理/导出无需额外 pip。
+
+### 开发思路 & 关键改动
+- **模型/训练**：TinyGlassNet 只用 Conv/Pool/ReLU/FC，保证可 ONNX → MCU；class weight= (background, glass)=(1.0,1.3) + grad clip=1.0 解决 fold 失衡/梯度尖峰；记录 lr、precision、recall、f1 供曲线分析。
+- **K-fold**：`run_kfold_training` 按 fold 生成 checkpoint+history+metrics，`BEST_METRIC` 默认 F1 选最优；输出统一 `tinyglassnet_best.pt` 明确推理入口。
+- **可视化**：K-fold 条形图（单色+顶部注数）替代 hue palette，避免 warning；confusion matrix 根据占比自动切换文字颜色，数字大而清晰；训练曲线帮助定位 epoch 调整点。
+- **ONNX & 推理**：`export_to_onnx` opset=13，time 轴设动态；infer Notebook 对比 Torch/ONNX `Max prob delta` 作为导出验证。
+- **环境**：Dockerfile 安装 onnxruntime，`.gitignore` 覆盖 checkpoint 目录，保证 repo 干净。
+
+### Insight / 巧思
+- K-fold 五折指标集中（recall 0.87–0.92，std≈0.02），验证了数据窗口/增强策略在正样上留足信息，class weight 起到了稳定作用。
+- 统一输出 best checkpoint，减少后续脚本对 fold 的耦合；即使将来更换 BEST_METRIC 也能无缝覆盖。
+- 推理 Notebook 直接对 mel `.npy` 做 batch 前向并对比 ORT，可作为导出 smoke 与 demo 入口，避免“结果黑盒”。
+
+### 使用示例 / 验证
+```bash
+make -f env.mk build        # 构建 Docker
+make -f env.mk notebook     # 容器内运行 train.ipynb（可先 SMOKE_TEST=True）
+```
+- 训练完成后生成 `cache/experiments/tinyglassnet_best.{pt,csv,onnx}`。
+- 推理：在 Notebook 中执行 `infer.ipynb`，输出 Torch vs ONNX 概率差（应 ≈1e-5）与概率柱状图。
+
+### TODO / Improvements
+1. **量化/INT8**（继承）：加入 PTQ/QAT 流程、生成 INT8 ONNX，并评估精度损耗。
+2. **Monte-Carlo 推理**：让 `infer.ipynb` 支持随机原始 WAV → pipeline → 推理，验证端到端鲁棒性。
+3. **自动化测试**：补 `tests/`（windowing、balance_folds、MelDataset、run_kfold_training 分割、Torch vs ONNX delta 等）。
+4. **标签扩展**：`datasets.py` 仍假设单正类，未来引入 gunshot 时需升级 label mapping 与 loss。
+5. **Profiling**：记录 TinyGlassNet 参数量/MACs/内存 footprint，提前评估 MCU 可部署性。
+6. **增强策略升级**（继承）：视训练表现，决定是否引入双窗口/多峰采样或更精细的背景混音。
+
+## 2025-11-15 Code Review & Follow-up
+
+### 结论
+- 数据分布抽样已完成，人耳可辨的窗口质量总体可接受，当前“峰值放在前半段”策略继续保留作为 baseline。
+- `generate_aligned_windows` 的 `extra_shifts` 兜底逻辑存在 `break` 过早退出的问题，实际并未尝试额外偏移；需在后续迭代中修复以恢复错位补偿能力。
+- `augment_time_shift` 的“只允许向内移动”逻辑符合“峰值靠前”策略，但需要在未来保留少量随机 shift 以防模型过度依赖绝对位置（放入 improvement backlog，待首个训练结果后评估）。
+- mix 增强阶段会对同一背景 clip 重复 `load_audio`，建议在 `_cache_glass_row` 内缓存背景 waveform 或引入 LRU，以减少 I/O 成本。
+- `datasets.py` 目前假定只有一个正类，将来扩展 gunshot 时需要动态构建 `LABEL_TO_ID` 并支持多正类采样。
+- 没有单元测试；建议至少补上 `generate_aligned_windows`、`balance_folds`、`MelDataset` 的轻量 pytest，以便后续 refactor 时有安全网。
+
+### Action Items
+1. 修复 `extra_shifts` 的 break 逻辑，确保错位兜底真正生效。
+2. 为 mix 背景采样添加 waveform 缓存，降低缓存阶段的磁盘负载。
+3. `datasets.py` 改为根据 `POSITIVE_LABELS` 动态生成 label→id 映射，提前兼容多任务。
+4. 规划最小单测集（windowing、fold balance、dataset getitem），待 baseline 训练前后择机补齐。
+5. 观察首轮训练结果后，再决定是否引入“双窗口/多峰”增强策略。

@@ -46,6 +46,8 @@ RUN pip install --upgrade pip \
         scikit-learn \
         tqdm \
         jupyterlab \
-        ipykernel
+        ipykernel \
+        onnx \
+        onnxruntime
 
 CMD ["bash"]
