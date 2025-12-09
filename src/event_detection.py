@@ -9,7 +9,7 @@ import librosa
 import numpy as np
 import torch
 
-from .config import HOP_LENGTH, N_FFT, N_MELS, POSITIVE_LABELS, SR, WINDOW_HOP, WINDOW_SECONDS
+from .config import HOP_LENGTH, MAX_EVENT_DUR, N_FFT, N_MELS, POSITIVE_LABELS, SR, WINDOW_HOP, WINDOW_SECONDS
 from .data_utils import log_mel_spectrogram
 from .inference import InferenceResult, run_onnx_inference, run_torch_inference
 
@@ -87,7 +87,8 @@ def _scale_to_snr(fg: np.ndarray, bg: np.ndarray, snr_db: float) -> np.ndarray:
 def detect_events_in_clip(audio: np.ndarray,
                           sr: int,
                           top_db: float = 35.0,
-                          min_event_dur: float = 0.08) -> List[Tuple[float, float]]:
+                          min_event_dur: float = 0.08,
+                          max_event_dur: float | None = None) -> List[Tuple[float, float]]:
     """Detect active segments in a clip using non-silent intervals."""
     intervals = librosa.effects.split(audio, top_db=top_db)
     events: List[Tuple[float, float]] = []
@@ -95,7 +96,17 @@ def detect_events_in_clip(audio: np.ndarray,
         dur = (end - start) / sr
         if dur < min_event_dur:
             continue
-        events.append((start / sr, end / sr))
+        if max_event_dur is not None and dur > max_event_dur:
+            chunk = int(max_event_dur * sr)
+            cursor = start
+            while cursor < end:
+                seg_end = min(cursor + chunk, end)
+                seg_dur = (seg_end - cursor) / sr
+                if seg_dur >= min_event_dur:
+                    events.append((cursor / sr, seg_end / sr))
+                cursor += chunk
+        else:
+            events.append((start / sr, end / sr))
     if not events:
         events.append((0.0, len(audio) / sr))
     return events
@@ -193,9 +204,13 @@ def mix_glass_on_bed(background_bed: np.ndarray,
                      snr_range_db: Tuple[float, float] | None = (3.0, 9.0),
                      split_top_db: float = 35.0,
                      min_event_dur: float = 0.08,
+                     max_event_dur: float | None = None,
+                     segment_on_original: bool = True,
                      seed: int | None = 42,
                      rng: np.random.Generator | None = None) -> Tuple[np.ndarray, List[GroundTruthEvent]]:
     """Overlay glass clips on top of a background bed with random spacing and SNR."""
+    if max_event_dur is None:
+        max_event_dur = MAX_EVENT_DUR
     if background_bed.ndim != 1:
         raise ValueError("background_bed must be mono waveform array")
     audio = background_bed.astype(np.float32).copy()
@@ -208,9 +223,9 @@ def mix_glass_on_bed(background_bed: np.ndarray,
     cursor = int(rng.uniform(start_offset_range[0], start_offset_range[1]) * sr)
 
     for spec in glass_order:
-        waveform, _ = librosa.load(spec.path, sr=sr)
-        waveform = waveform.astype(np.float32)
-        waveform = _apply_gain(waveform, spec.gain_db)
+        waveform_orig, _ = librosa.load(spec.path, sr=sr)
+        waveform_orig = waveform_orig.astype(np.float32)
+        waveform = _apply_gain(waveform_orig, spec.gain_db)
         waveform = _apply_fade(waveform, crossfade) if crossfade > 0 else waveform
 
         start = cursor
@@ -218,7 +233,12 @@ def mix_glass_on_bed(background_bed: np.ndarray,
 
         if end > len(audio):
             pad = end - len(audio)
-            audio = np.pad(audio, (0, pad))
+            if len(background_bed) > 0:
+                tiles = (pad // len(background_bed)) + 2
+                bed_tiled = np.tile(background_bed, tiles)[:pad]
+                audio = np.concatenate([audio, bed_tiled])
+            else:
+                audio = np.pad(audio, (0, pad))
 
         snr_used = None
         if snr_range_db is not None:
@@ -228,8 +248,20 @@ def mix_glass_on_bed(background_bed: np.ndarray,
 
         audio[start:end] += waveform
 
-        clip_events = detect_events_in_clip(waveform, sr=sr, top_db=split_top_db, min_event_dur=min_event_dur)
+        segment_source = waveform_orig if segment_on_original else waveform
+        clip_events = detect_events_in_clip(
+            segment_source,
+            sr=sr,
+            top_db=split_top_db,
+            min_event_dur=min_event_dur,
+            max_event_dur=max_event_dur,
+        )
+        if not clip_events:
+            clip_events = [(0.0, min(len(segment_source)/sr, max_event_dur or len(segment_source)/sr))]
+
         for ev_start, ev_end in clip_events:
+            if max_event_dur is not None and (ev_end - ev_start) > max_event_dur:
+                ev_end = ev_start + max_event_dur
             events.append(
                 GroundTruthEvent(
                     label=spec.label,

@@ -21,6 +21,8 @@ from src.config import (
     CASE_STUDY_DEFAULTS,
     CASE_STUDY_DIR,
     CASE_STUDY_SCHEMA_VERSION,
+    HARD_BG_CLASSES,
+    HARD_BG_WEIGHT,
     SEED,
 )
 from src.event_detection import (
@@ -50,6 +52,7 @@ def _load_config(path: Path | None) -> dict[str, Any]:
 
 def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | None):
     cfg = _load_config(cfg_path)
+    background_only = cfg.get("background_only", False)
     rng = np.random.default_rng(seed)
 
     run_id = f"run_{int(time.time())}"
@@ -69,7 +72,7 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     # Collect clips
     external_dir = Path("data/external")
     glass_paths = sorted(external_dir.glob("glass_ext_*"))
-    if not glass_paths:
+    if not glass_paths and not background_only:
         raise FileNotFoundError("No external glass clips found under data/external")
     glass_specs = [ClipSpec(path=p, label=GLASS_LABEL, gain_db=cfg["glass_gain_db"]) for p in glass_paths]
 
@@ -78,7 +81,15 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     meta_df = pd.read_csv(META_FILE)
     non_glass_df = meta_df[~meta_df["category"].isin(POSITIVE_LABELS.keys())]
     bg_sample_n = max(18, len(glass_specs) * 4)
-    bg_samples = non_glass_df.sample(n=bg_sample_n, random_state=seed, replace=len(non_glass_df) < bg_sample_n)
+    
+    # weighted sampling to include hard backgrounds
+    if HARD_BG_CLASSES:
+        non_glass_df = non_glass_df.copy()
+        non_glass_df['bg_w'] = non_glass_df['category'].apply(lambda c: HARD_BG_WEIGHT if c in HARD_BG_CLASSES else 1.0)
+        bg_samples = non_glass_df.sample(n=bg_sample_n, random_state=seed, replace=len(non_glass_df) < bg_sample_n, weights=non_glass_df['bg_w'])
+    else:
+        bg_samples = non_glass_df.sample(n=bg_sample_n, random_state=seed, replace=len(non_glass_df) < bg_sample_n)
+
     bg_specs = [
         ClipSpec(path=AUDIO_DIR / row["filename"], label="background", gain_db=cfg["background_gain_db"])
         for _, row in bg_samples.iterrows()
@@ -94,19 +105,24 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     )
 
     # Mix glass and detect GT
-    audio, gt_events = mix_glass_on_bed(
-        bed,
-        glass_specs,
-        sr=SR,
-        start_offset_range=cfg["start_offset_range"],
-        gap_range=cfg["gap_range"],
-        crossfade_ms=cfg["crossfade_ms"],
-        snr_range_db=cfg["snr_range_db"],
-        split_top_db=cfg["split_top_db"],
-        min_event_dur=cfg["min_event_dur"],
-        seed=None,
-        rng=rng,
-    )
+    if background_only:
+        audio = bed
+        gt_events = []
+    else:
+        audio, gt_events = mix_glass_on_bed(
+            bed,
+            glass_specs,
+            sr=SR,
+            start_offset_range=cfg["start_offset_range"],
+            gap_range=cfg["gap_range"],
+            crossfade_ms=cfg["crossfade_ms"],
+            snr_range_db=cfg["snr_range_db"],
+            split_top_db=cfg["split_top_db"],
+            min_event_dur=cfg["min_event_dur"],
+            max_event_dur=cfg.get("max_event_dur"),
+            seed=None,
+            rng=rng,
+        )
     mix_path = out_dir / "mix.wav"
     sf.write(mix_path, audio, SR)
 
@@ -170,6 +186,7 @@ def main():
     parser.add_argument("--config", type=Path, default=None, help="Override defaults via JSON file")
     parser.add_argument("--output", type=Path, default=None, help="Output directory (default CASE_STUDY_DIR)")
     parser.add_argument("--seed", type=int, default=SEED, help="RNG seed")
+    parser.add_argument("--background-only", action="store_true", help="Run without inserting glass events")
     args = parser.parse_args()
     run_case_study(args.config, args.output, args.seed)
 

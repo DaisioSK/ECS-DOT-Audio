@@ -321,3 +321,30 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - Phase-1 后续：根据分桶结果判定薄弱场景（低 SNR？事件偏移？），再决定是否调整 smooth/阈值。
 - Phase-2（待）：硬负样本回灌，偏置背景抽样（选取“玻璃样”背景高置信误报），注入训练背景集。
 - Phase-3（待）：低 SNR/重叠增广、放宽峰值位置、简单时序平滑/滞后或轻量时序模型；阈值/merge/tolerance 数据驱动调优。
+
+
+## 2025-12-09 17:22:27 +08 Session (Case study robustness & GT tooling)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3「事件检测验证」继续收敛 case study 与评估工具。
+- **重点**：提升背景易误判场景的可观测性/可控性，完善 GT 流程与可视化，支持纯背景探针模式。
+
+### 本次主要改动（功能）
+- **背景控制**：
+  - 新增 `background_only` 开关（CLI/Notebook），可只生成背景混音用于误报探针；run_id 仍保存配置与结果。
+  - 背景抽样支持按类别加权（易误判类：keyboard_typing、crow、chainsaw、door_wood_knock、cough 可配置），减少“玻璃样”背景漏覆盖。
+  - 背景平铺补齐，避免混音尾部静音；背景段打印严格截断到床长，去除尾部伪零长条目。
+- **GT 生成与审查**：
+  - GT 切分在原始玻璃片段上完成，再映射到时间轴；支持长段拆分成多段（不再因叠加/缩放只得单段）。
+  - Notebook 加“GT 审查/忽略”单元：备份 `gt_events_raw`，人工试听后可维护 IGNORE 列表，后续评估使用过滤后的 GT。
+- **评估/可视化**：
+  - 评估保留平滑/分桶（SNR、延迟）、重叠命中混淆矩阵、FP/FN 统计；打印格式修复。
+  - 可视化改为三行子图：概率、GT/Pred 时间条、背景轨道（带文件名），秒刻度、加宽画布；试听单元移到末尾并打印背景段时间。
+
+### 使用示例
+- Notebook：`make -f env.mk notebook`，可在配置中启用 `BACKGROUND_ONLY` 或调整硬背景类别权重，运行完整流程（GT 审查→评估→可视化→试听）。
+- CLI：`python -m src.case_study_cli --background-only --seed 123 --output cache/case_study_runs` 生成纯背景探针；若正常模式则同样受加权背景与 GT 切分改进。
+
+### TODO / 后续
+- 根据误报类别（如 keyboard_typing/crow/chainsaw/door_wood_knock/cough）调整权重或追加硬负样本回灌；评估分桶结果后再定。
+- 如需进一步清洗 GT，可继续用 IGNORE 列表人工筛除；若背景探针仍高误报，考虑在训练增广中对易误判类加量。

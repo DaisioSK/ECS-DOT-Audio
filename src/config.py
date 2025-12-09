@@ -44,13 +44,23 @@ CASE_STUDY_DEFAULTS = {   'background_gain_db': -8.0,
     'hyst_high': None,
     'hyst_low': None,
     'merge_gap': 0.12,
-    'min_event_dur': 0.08,
+    'min_event_dur': 0.3,
     'smooth_k': 1,
     'snr_range_db': (4.0, 9.0),
-    'split_top_db': 30.0,
+    'split_top_db': 20.0,
     'start_offset_range': (0.5, 6.0),
-    'target_bed_duration': 60.0,
+    'target_bed_duration': 80.0,
     'threshold': 0.7,
-    'tolerance': 0.5}
+    'tolerance': 0.5,
+    'background_only': False,
+    'max_event_dur': 1.0}
 
 CASE_STUDY_SCHEMA_VERSION = "v1"
+HARD_BG_CLASSES = [
+    "keyboard_typing",
+    "crow",
+    "chainsaw",
+    "door_wood_knock",
+]
+HARD_BG_WEIGHT = 2.0
+MAX_EVENT_DUR = 99999.0
