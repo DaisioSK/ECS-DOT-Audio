@@ -371,6 +371,81 @@ __all__ = [
     "sliding_log_mel_windows",
     "merge_events",
     "match_events",
+    "match_events_with_pairs",
+    "bucket_recall_by_snr",
+    "bucket_delay",
+    "smooth_probabilities",
     "predict_glass_probs",
     "GLASS_LABEL",
 ]
+
+
+def match_events_with_pairs(pred_events, gt_events, tolerance=0.5):
+    """Return matched pairs (gt, pred, delay_sec) plus unmatched indices for gt/pred."""
+    matched_gt = set()
+    matched_pred = set()
+    pairs = []
+    for p_idx, pred in enumerate(pred_events):
+        for g_idx, gt in enumerate(gt_events):
+            if g_idx in matched_gt:
+                continue
+            overlaps = pred["end"] + tolerance >= gt.start and pred["start"] - tolerance <= gt.end
+            if overlaps:
+                matched_gt.add(g_idx)
+                matched_pred.add(p_idx)
+                gt_center = 0.5 * (gt.start + gt.end)
+                pred_center = 0.5 * (pred["start"] + pred["end"])
+                delay = abs(pred_center - gt_center)
+                pairs.append((gt, pred, delay))
+                break
+    unmatched_gt = [i for i in range(len(gt_events)) if i not in matched_gt]
+    unmatched_pred = [i for i in range(len(pred_events)) if i not in matched_pred]
+    return pairs, unmatched_gt, unmatched_pred
+
+
+def bucket_recall_by_snr(gt_events, matched_gt_indices):
+    """Compute recall per SNR bucket for matched GT indices."""
+    buckets = {"<5": {"gt": 0, "tp": 0}, "5-8": {"gt": 0, "tp": 0}, ">8": {"gt": 0, "tp": 0}}
+    for idx, ev in enumerate(gt_events):
+        snr = ev.snr_db if ev.snr_db is not None else 999.0
+        if snr < 5:
+            key = "<5"
+        elif snr <= 8:
+            key = "5-8"
+        else:
+            key = ">8"
+        buckets[key]["gt"] += 1
+        if idx in matched_gt_indices:
+            buckets[key]["tp"] += 1
+    recalls = {}
+    for key, vals in buckets.items():
+        gt = vals["gt"]
+        tp = vals["tp"]
+        recalls[key] = tp / gt if gt else None
+    return recalls
+
+
+def bucket_delay(pairs):
+    """Bucket delays (abs center diff) for matched pairs."""
+    buckets = {"<0.25": 0, "0.25-0.5": 0, ">0.5": 0}
+    for _, _, delay in pairs:
+        if delay < 0.25:
+            buckets["<0.25"] += 1
+        elif delay <= 0.5:
+            buckets["0.25-0.5"] += 1
+        else:
+            buckets[">0.5"] += 1
+    return buckets
+
+
+def smooth_probabilities(probs, kernel_size=1):
+    """Apply simple moving average smoothing to probability list."""
+    if kernel_size <= 1 or len(probs) == 0:
+        return list(probs)
+    k = int(kernel_size)
+    padded = [probs[0]] * (k // 2) + list(probs) + [probs[-1]] * (k // 2)
+    out = []
+    for i in range(len(probs)):
+        window = padded[i:i + k]
+        out.append(float(sum(window) / len(window)))
+    return out

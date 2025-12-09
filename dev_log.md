@@ -278,3 +278,46 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 阈值/merge/tolerance 基于分段真值调优，分 SNR 桶报表。
 - 背景池约束与 SNR 分桶延迟统计。
 - CLI 增加阈值搜索/多 run 批量；单测/CI/lint 待补；自动化导出/评估脚本仍可推进。
+
+
+## 2025-12-09 12:25:00 +08 Session (Phase-1: smoothing, buckets, viz tweaks)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3「事件检测验证」继续工程/评估强化。
+- **Phase 计划**：
+  - Phase-1 信息先行：平滑/分桶评估，定位问题。
+  - Phase-2 回灌训练：硬负样本/偏置背景抽样（待后续）。
+  - Phase-3 训练增广/时序模型（待后续）。
+
+### TL;DR
+- 集中 case study 默认参数，调整 gap/merge/split/SNR 以减少事件粘连、极低 SNR 干扰。
+- 增强评估：平滑、SNR 分桶、延迟分桶，评估打印修复；可视化改为三行子图（概率、GT/Pred 时间条、背景轨道）。
+- 试听单元移至末尾；CLI/Notebook 均读集中 defaults，run_id 输出保持。
+
+### 本次完成（细节）
+1. **配置** (`src/config.py`)
+   - 默认更新：`gap_range=(0.2,8.0)`, `merge_gap=0.12`, `split_top_db=30.0`, `snr_range_db=(4.0,9.0)`, 保留 `smooth_k`/滞后占位，集中于 `CASE_STUDY_DEFAULTS`。
+   - 保留 `CASE_STUDY_SCHEMA_VERSION`、`CASE_STUDY_DIR`，路径与版本集中。
+2. **评估 helper** (`src/event_detection.py`)
+   - 新增：`smooth_probabilities`、`match_events_with_pairs`、`bucket_recall_by_snr`、`bucket_delay`，用于平滑与分桶统计。
+   - `__all__` 更新，便于 import。
+3. **CLI** (`src/case_study_cli.py`)
+   - 仍生成 `run_<ts>/`，保存 config/mix/results；修正 matched_gt_indices 计算。
+   - 结果包含平滑后概率、SNR/延迟分桶、未匹配计数，读配置 defaults 自动生效。
+4. **Notebook** (`case_study.ipynb`)
+   - 评估打印修复：逐行输出 TP/FP/FN/P/R/F1、SNR 分桶、延迟分桶、未匹配计数。
+   - 可视化升级：三行子图（概率；GT/Pred 时间条；背景轨道含文件名），每秒刻度，横轴更精细。
+   - 试听单元移至末尾，阅读流更顺。
+
+### 开发思路与原因
+- 痛点：事件太近粘连、GT 前“预报”、极低 SNR 干扰，评估输出不易读。
+- 方案：减小 merge_gap、抬高 gap 下限与 split_top_db，略抬 SNR 下限；加入平滑/分桶定位问题；优化图示与打印便于肉眼对照短事件。
+
+### 使用示例
+- Notebook：`make -f env.mk notebook`，运行 case_study，默认用新参数；图表含背景轨道与秒刻度，末尾试听。
+- CLI：`python -m src.case_study_cli --seed 123 --output cache/case_study_runs`，结果含 run_config、mix.wav、results.json（含分桶/平滑）。
+
+### TODO / Next (沿 Phase 计划)
+- Phase-1 后续：根据分桶结果判定薄弱场景（低 SNR？事件偏移？），再决定是否调整 smooth/阈值。
+- Phase-2（待）：硬负样本回灌，偏置背景抽样（选取“玻璃样”背景高置信误报），注入训练背景集。
+- Phase-3（待）：低 SNR/重叠增广、放宽峰值位置、简单时序平滑/滞后或轻量时序模型；阈值/merge/tolerance 数据驱动调优。

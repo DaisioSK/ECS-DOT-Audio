@@ -1,4 +1,4 @@
-"""CLI entry for case study generation, inference, and logging."""
+"""CLI entry for case study generation, inference, smoothing, and logging."""
 from __future__ import annotations
 
 import argparse
@@ -21,16 +21,21 @@ from src.config import (
     CASE_STUDY_DEFAULTS,
     CASE_STUDY_DIR,
     CASE_STUDY_SCHEMA_VERSION,
+    SEED,
 )
 from src.event_detection import (
     ClipSpec,
     GLASS_LABEL,
     build_background_bed,
-    mix_glass_on_bed,
-    sliding_log_mel_windows,
-    merge_events,
+    bucket_delay,
+    bucket_recall_by_snr,
     match_events,
+    match_events_with_pairs,
+    merge_events,
+    mix_glass_on_bed,
     predict_glass_probs,
+    sliding_log_mel_windows,
+    smooth_probabilities,
 )
 from src.inference import create_onnx_session, load_torch_checkpoint
 
@@ -127,9 +132,18 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
         onnx_sess = create_onnx_session(onnx_path)
         onnx_probs, _ = predict_glass_probs(batch, spans, session=onnx_sess, device="cpu")
 
+    # Smoothing
+    smooth_k = int(cfg.get("smooth_k", 1) or 1)
+    torch_probs_smooth = smooth_probabilities(torch_probs, kernel_size=smooth_k)
+
     # Merge and eval
-    pred_events = merge_events(spans, torch_probs, threshold=cfg["threshold"], merge_gap=cfg["merge_gap"])
+    pred_events = merge_events(spans, torch_probs_smooth, threshold=cfg["threshold"], merge_gap=cfg["merge_gap"])
     metrics = match_events(pred_events, gt_events, tolerance=cfg["tolerance"])
+    pairs, unmatched_gt, unmatched_pred = match_events_with_pairs(pred_events, gt_events, tolerance=cfg["tolerance"])
+
+    matched_gt_indices = [gt_events.index(gt) for gt, _, _ in pairs]
+    snr_recalls = bucket_recall_by_snr(gt_events, matched_gt_indices)
+    delay_buckets = bucket_delay(pairs)
 
     # Persist results
     results = {
@@ -140,7 +154,12 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
         "metrics": metrics,
         "spans": spans,
         "torch_probs": torch_probs,
+        "torch_probs_smooth": torch_probs_smooth,
         "onnx_probs": onnx_probs,
+        "snr_recalls": snr_recalls,
+        "delay_buckets": delay_buckets,
+        "unmatched_gt": unmatched_gt,
+        "unmatched_pred": unmatched_pred,
     }
     (out_dir / "results.json").write_text(json.dumps(results, indent=2, default=float))
     print(f"run_id={run_id} metrics={metrics} mix={mix_path}")

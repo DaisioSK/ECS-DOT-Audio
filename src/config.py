@@ -37,19 +37,20 @@ BACKGROUND_MULTIPLIER = 3
 
 # Case study / event detection defaults
 CASE_STUDY_DIR = CACHE_DIR / "case_study"
-CASE_STUDY_DEFAULTS = {
-    "target_bed_duration": 60.0,
-    "background_gain_db": -8.0,
-    "glass_gain_db": 0.0,
-    "start_offset_range": (0.5, 6.0),
-    "gap_range": (-0.5, 8.0),
-    "snr_range_db": (3.0, 9.0),
-    "crossfade_ms": 15.0,
-    "split_top_db": 35.0,
-    "min_event_dur": 0.08,
-    "threshold": 0.5,
-    "merge_gap": 0.25,
-    "tolerance": 0.5,
-}
+CASE_STUDY_DEFAULTS = {   'background_gain_db': -8.0,
+    'crossfade_ms': 15.0,
+    'gap_range': (0.2, 8.0),
+    'glass_gain_db': 0.0,
+    'hyst_high': None,
+    'hyst_low': None,
+    'merge_gap': 0.12,
+    'min_event_dur': 0.08,
+    'smooth_k': 1,
+    'snr_range_db': (4.0, 9.0),
+    'split_top_db': 30.0,
+    'start_offset_range': (0.5, 6.0),
+    'target_bed_duration': 60.0,
+    'threshold': 0.7,
+    'tolerance': 0.5}
 
 CASE_STUDY_SCHEMA_VERSION = "v1"
