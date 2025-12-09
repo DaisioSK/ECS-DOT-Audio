@@ -185,3 +185,56 @@ make -f env.mk notebook     # 容器内运行 train.ipynb（可先 SMOKE_TEST=Tr
 3. `datasets.py` 改为根据 `POSITIVE_LABELS` 动态生成 label→id 映射，提前兼容多任务。
 4. 规划最小单测集（windowing、fold balance、dataset getitem），待 baseline 训练前后择机补齐。
 5. 观察首轮训练结果后，再决定是否引入“双窗口/多峰”增强策略。
+
+
+## 2025-12-09 10:59:25 +08 Session (Capstone case study & event detection)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3「事件检测验证」。聚焦真实/合成长音频上的玻璃事件检测体验与评估。
+- **Task**：Task-1 构建可控混音流水线；Task-2 滑窗推理 + 事件合并评估；Task-3 体验回放与可视化。
+
+### TL;DR
+- 新增事件级推理 helper（背景床 + 随机叠加 glass + SNR 控制 + 非静音分段），支持真实场景的长音频事件检测。
+- `case_study.ipynb` 重建：生成 60s 背景床，随机放置/重叠玻璃片段，自动切分真值事件，滑窗推理（Torch/ONNX）、事件合并、P/R/F1、可视化、试听。
+- 真值标注从“整段 clip”改为“非静音子段”，减少空白/多事件误差；混音允许多 SNR，评估更贴近现场噪声。
+
+### 项目状态（宏观→微观）
+- **宏观**：数据准备、训练、推理链路已成型；新增事件检测验证路径，补齐长音频滑窗与事件评估。
+- **混音与真值**：可构建 40–60s 背景床，随机顺序/间隔叠加 glass，自动非静音分段生成真值（含 SNR）。
+- **推理与评估**：滑窗 log-mel (1s/0.5s) → TinyGlassNet Torch/ONNX → 阈值合并 → 容差匹配，输出 TP/FP/FN、P/R/F1，附试听和时间轴可视化。
+- **素材**：`data/external/glass_ext_01..05.*` + ESC-50 非玻璃片段作为背景池。
+
+### 本次完成
+1. 新建事件检测 helper（`src/event_detection.py`）：背景床构建、随机叠加、SNR 调制、非静音分段、滑窗生成、事件合并/匹配。
+2. 重建 `case_study.ipynb`：参数化混音/评估，支持试听与可视化；默认 60s 底床、随机起点/间隔、SNR 3–9dB、允许轻度重叠。
+3. 统一外部玻璃片段命名（`glass_ext_01..05`），确保批处理与日志可读。
+
+### 开发思路与关键改动
+- 背景→痛点→方案：原版事件集中在前半，真值粗糙（整段 clip），背景过大可能淹没 glass。新方案随机排序/起点/间隔（含负间隔允许重叠），叠加时按目标 SNR 缩放玻璃，非静音分段提取真实事件（避免空白/多事件偏差）。
+- `src/event_detection.py`：
+  - `build_background_bed`：循环拼接背景池至目标时长，15ms 淡入淡出。
+  - `mix_glass_on_bed`：随机顺序、随机起点/间隔、可负间隔（轻度重叠）；按 `SNR_RANGE_DB` 与背景 RMS 调整玻璃能量；非静音分段 (`librosa.effects.split`) 生成精确事件，记录 SNR。
+  - 其它：`detect_events_in_clip`、`_scale_to_snr`、保留滑窗/合并/匹配/推理封装。
+- Notebook (`case_study.ipynb`)：
+  - 配置参数化：背景增益、玻璃增益、起点/间隔范围、SNR 范围、分段阈值/最小时长、阈值/合并间隔/容差。
+  - 流程：收集素材→背景床→叠加并切分真值→试听+真值打印（含 SNR）→滑窗 mel→Torch/ONNX 推理→事件合并/评估→时间轴可视化。
+
+### Insight / 巧思
+- 真值用“非静音子段”替代整段，解决 clip 内静音/多击碎导致的误差，评估更公平。
+- 随机时间戳+可重叠间隔让事件分布均衡，避免模型只在前半段被测试。
+- SNR 控制在混音时完成（对玻璃缩放），可便捷生成不同难度场景；打印 SNR 便于关联误报/漏报。
+
+### 使用示例 / 验证
+```bash
+make -f env.mk notebook   # 容器内打开 case_study.ipynb
+```
+按序运行 notebook：
+1) 构造 60s 背景床，叠加 5 个 glass（随机顺序/间隔/重叠，SNR 3–9dB），保存 `cache/case_study/mix.wav`。
+2) 试听混音，查看真值事件起止（含 SNR）。
+3) 滑窗 mel → Torch/ONNX 推理 → 事件合并/评估（TP/FP/FN、P/R/F1）→ 概率时间轴标注 GT/Pred。
+
+### TODO / Improvement
+- 阈值与窗口：基于分段真值再调优阈值/merge_gap/tolerance，分 SNR 桶输出命中率。
+- 更逼真背景：支持不同类型背景的最大占比/长度约束，避免单类背景占主导。
+- 质量指标：增加延迟统计（预测事件中心 vs 真值中心偏移均值/分位数）。
+- 自动化：封装 case study 为 CLI（给定参数自动生成混音、跑推理、输出指标）。此前 TODO（训练/量化/配置抽象/QA 自动化）仍需延续。
