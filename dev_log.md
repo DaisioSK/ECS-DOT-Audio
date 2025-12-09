@@ -238,3 +238,43 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 更逼真背景：支持不同类型背景的最大占比/长度约束，避免单类背景占主导。
 - 质量指标：增加延迟统计（预测事件中心 vs 真值中心偏移均值/分位数）。
 - 自动化：封装 case study 为 CLI（给定参数自动生成混音、跑推理、输出指标）。此前 TODO（训练/量化/配置抽象/QA 自动化）仍需延续。
+
+
+## 2025-12-09 11:42:37 +08 Session (Engineering hardening: config, run_id, CLI)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3「事件检测验证」持续工程化。
+- **Task**：Task-Eng-1 参数集中化与配置快照；Task-Eng-2 防覆盖 run_id 输出；Task-Eng-3 提供 CLI 便于批量/CI 运行。
+
+### TL;DR
+- 集中 case study 默认参数/路径/版本到 `config.py`，避免散落硬编码。
+- 事件检测 helper 重构：抽取交叉淡入工具、支持外部 RNG 注入，减少重复。
+- 新增 `case_study_cli.py`：生成 run_id 目录，保存 config/结果/mix.wav，便于复现与批量跑。
+- Notebook 同步：引用集中 defaults，保存 `run_config.json`，统一 RNG_SEED，输出路径标准化。
+
+### 本次完成
+1. `src/config.py`：新增 `CASE_STUDY_DEFAULTS`、`CASE_STUDY_DIR`、`CASE_STUDY_SCHEMA_VERSION`，集中背景增益/间隔/SNR/阈值等默认值与路径。
+2. `src/event_detection.py` 重构：
+   - 提取 `_crossfade_blend` 复用淡入淡出/交叉淡入，减少重复。
+   - `mix_glass_on_bed` 支持外部 RNG 注入（或 seed），保持 SNR 缩放/非静音分段逻辑。
+3. `case_study.ipynb` 重建：
+   - 读取 config defaults，记录 `run_config.json`，统一 RNG_SEED。
+   - 输出路径从 `CASE_STUDY_DIR` 取得，仍生成 `mix.wav` 等结果。
+4. 新增 `src/case_study_cli.py`：
+   - `python -m src.case_study_cli --seed 42 --config my_cfg.json --output cache/case_study_runs`。
+   - 自动生成 run_id 子目录，落盘 config、mix.wav、results.json，避免覆盖，便于批量/CI。
+
+### 开发思路与关键改动
+- 背景→痛点：硬编码分散、输出易覆盖、随机性不可追溯。
+- 方案：集中 defaults + 版本号，run_id 输出目录，配置/结果快照；Helper 抽象交叉淡入、统一 RNG 注入。
+- 实现：config 添加 defaults/schema；event_detection 抽 `_crossfade_blend`、rng 参数；notebook 消费集中参数并写 config；CLI 路径/seed/run_id 打通。
+
+### 使用示例 / 验证
+- CLI：`python -m src.case_study_cli --seed 123 --config my_cfg.json --output cache/case_study_runs`
+  - 输出：`cache/case_study_runs/run_<timestamp>/` 下含 `run_config.json`、`mix.wav`、`results.json`。
+- Notebook：`make -f env.mk notebook` 打开 `case_study.ipynb`，参数默认取自 config，生成 `cache/case_study/run_config.json` 与 `mix.wav`。
+
+### TODO / Improvement（继承）
+- 阈值/merge/tolerance 基于分段真值调优，分 SNR 桶报表。
+- 背景池约束与 SNR 分桶延迟统计。
+- CLI 增加阈值搜索/多 run 批量；单测/CI/lint 待补；自动化导出/评估脚本仍可推进。

@@ -55,6 +55,19 @@ def _apply_fade(audio: np.ndarray, fade_samples: int) -> np.ndarray:
     return out
 
 
+def _crossfade_blend(timeline: List[np.ndarray], waveform: np.ndarray, crossfade: int) -> tuple[int, np.ndarray]:
+    """Blend waveform onto the last clip with crossfade; return used overlap and trimmed waveform."""
+    if not timeline or crossfade <= 0:
+        return 0, waveform
+    overlap = min(crossfade, len(timeline[-1]), len(waveform))
+    if overlap > 0:
+        fade_out = np.linspace(1.0, 0.0, overlap, endpoint=False, dtype=np.float32)
+        fade_in = np.linspace(0.0, 1.0, overlap, endpoint=False, dtype=np.float32)
+        timeline[-1][-overlap:] = timeline[-1][-overlap:] * fade_out + waveform[:overlap] * fade_in
+        waveform = waveform[overlap:]
+    return overlap, waveform
+
+
 def _rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(x)) + 1e-8))
 
@@ -105,18 +118,11 @@ def compose_timeline(clips: Sequence[ClipSpec],
         waveform = _apply_gain(waveform, spec.gain_db)
         waveform = _apply_fade(waveform, crossfade) if crossfade > 0 else waveform
 
-        overlap = crossfade if timeline else 0
-        if timeline and overlap > 0:
-            overlap = min(overlap, len(timeline[-1]), len(waveform))
-            if overlap > 0:
-                fade_out = np.linspace(1.0, 0.0, overlap, endpoint=False, dtype=np.float32)
-                fade_in = np.linspace(0.0, 1.0, overlap, endpoint=False, dtype=np.float32)
-                timeline[-1][-overlap:] = timeline[-1][-overlap:] * fade_out + waveform[:overlap] * fade_in
-                waveform = waveform[overlap:]
+        overlap, waveform = _crossfade_blend(timeline, waveform, crossfade)
         start_sample = max(cursor - overlap, 0)
         end_sample = start_sample + clip_len
-        cursor = end_sample
         timeline.append(waveform)
+        cursor = end_sample
 
         if spec.label != "background":
             events.append(
@@ -160,16 +166,9 @@ def build_background_bed(clips: Sequence[ClipSpec],
         waveform = _apply_gain(waveform, spec.gain_db)
         waveform = _apply_fade(waveform, crossfade) if crossfade > 0 else waveform
 
-        overlap = crossfade if timeline else 0
-        if timeline and overlap > 0:
-            overlap = min(overlap, len(timeline[-1]), len(waveform))
-            if overlap > 0:
-                fade_out = np.linspace(1.0, 0.0, overlap, endpoint=False, dtype=np.float32)
-                fade_in = np.linspace(0.0, 1.0, overlap, endpoint=False, dtype=np.float32)
-                timeline[-1][-overlap:] = timeline[-1][-overlap:] * fade_out + waveform[:overlap] * fade_in
-                waveform = waveform[overlap:]
-        cursor += len(waveform)
+        overlap, waveform = _crossfade_blend(timeline, waveform, crossfade)
         timeline.append(waveform)
+        cursor += len(waveform)
 
         clip_idx += 1
         if target_samples is None or cursor >= target_samples:
@@ -194,14 +193,15 @@ def mix_glass_on_bed(background_bed: np.ndarray,
                      snr_range_db: Tuple[float, float] | None = (3.0, 9.0),
                      split_top_db: float = 35.0,
                      min_event_dur: float = 0.08,
-                     seed: int = 42) -> Tuple[np.ndarray, List[GroundTruthEvent]]:
+                     seed: int | None = 42,
+                     rng: np.random.Generator | None = None) -> Tuple[np.ndarray, List[GroundTruthEvent]]:
     """Overlay glass clips on top of a background bed with random spacing and SNR."""
     if background_bed.ndim != 1:
         raise ValueError("background_bed must be mono waveform array")
     audio = background_bed.astype(np.float32).copy()
     events: List[GroundTruthEvent] = []
     crossfade = int(sr * crossfade_ms / 1000.0)
-    rng = np.random.default_rng(seed)
+    rng = rng or np.random.default_rng(seed)
 
     glass_order = list(glass_clips)
     rng.shuffle(glass_order)
