@@ -61,6 +61,7 @@ HARD_BG_CLASSES = [
     "crow",
     "chainsaw",
     "door_wood_knock",
+    "coughing"
 ]
 HARD_BG_WEIGHT = 2.0
 MAX_EVENT_DUR = 99999.0
