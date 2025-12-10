@@ -9,12 +9,13 @@ import librosa
 import numpy as np
 import torch
 
-from .config import HOP_LENGTH, MAX_EVENT_DUR, N_FFT, N_MELS, POSITIVE_LABELS, SR, WINDOW_HOP, WINDOW_SECONDS
+from .config import HOP_LENGTH, LABEL_TO_ID, MAX_EVENT_DUR, N_FFT, N_MELS, SR, TARGET_LABELS, WINDOW_HOP, WINDOW_SECONDS
 from .data_utils import log_mel_spectrogram
 from .inference import InferenceResult, run_onnx_inference, run_torch_inference
 
 
-GLASS_LABEL = list(POSITIVE_LABELS.values())[0]
+GLASS_LABEL = TARGET_LABELS[0]
+GLASS_CLASS_ID = LABEL_TO_ID.get(GLASS_LABEL, 0)
 
 
 @dataclass
@@ -387,7 +388,9 @@ def predict_glass_probs(batch: torch.Tensor,
         result = run_torch_inference(model, batch, device=device)
     else:
         result = run_onnx_inference(session, batch)
-    glass_probs = result.probs[:, 1].tolist()
+    if GLASS_CLASS_ID >= result.probs.shape[1]:
+        raise ValueError(f"Glass class index {GLASS_CLASS_ID} out of bounds for probs shape {result.probs.shape}")
+    glass_probs = result.probs[:, GLASS_CLASS_ID].tolist()
     if len(glass_probs) != len(spans):
         raise ValueError("Mismatch between spans and probability outputs.")
     return glass_probs, result

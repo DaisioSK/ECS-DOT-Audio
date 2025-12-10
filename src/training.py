@@ -22,22 +22,27 @@ class EpochResult:
 
 
 def _compute_binary_metrics(preds: torch.Tensor, targets: torch.Tensor) -> Dict[str, float]:
-    """Compute accuracy/precision/recall/F1 for binary classification."""
-    preds = preds.view(-1).detach().cpu()
-    targets = targets.view(-1).detach().cpu()
-    total = targets.numel()
-    correct = (preds == targets).sum().item()
-    tp = ((preds == 1) & (targets == 1)).sum().item()
-    fp = ((preds == 1) & (targets == 0)).sum().item()
-    fn = ((preds == 0) & (targets == 1)).sum().item()
-    precision = tp / (tp + fp + 1e-8)
-    recall = tp / (tp + fn + 1e-8)
-    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    """Compute subset accuracy and macro precision/recall/F1 for multi-label."""
+    preds = preds.detach().cpu().float()
+    targets = targets.detach().cpu().float()
+    if preds.numel() == 0:
+        return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+    eps = 1e-8
+    tp = (preds * targets).sum(dim=0)
+    fp = (preds * (1 - targets)).sum(dim=0)
+    fn = ((1 - preds) * targets).sum(dim=0)
+    precision_c = tp / (tp + fp + eps)
+    recall_c = tp / (tp + fn + eps)
+    f1_c = 2 * precision_c * recall_c / (precision_c + recall_c + eps)
+    macro_precision = precision_c.mean().item()
+    macro_recall = recall_c.mean().item()
+    macro_f1 = f1_c.mean().item()
+    subset_acc = (preds == targets).all(dim=1).float().mean().item()
     return {
-        "accuracy": correct / max(total, 1),
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
+        "accuracy": subset_acc,
+        "precision": macro_precision,
+        "recall": macro_recall,
+        "f1": macro_f1,
     }
 
 
@@ -60,7 +65,17 @@ def _run_epoch(model: nn.Module,
             inputs = inputs.to(device)
             targets = targets.to(device)
             logits = model(inputs)
-            loss = criterion(logits, targets)
+            # Use provided criterion; if CrossEntropy is given but targets are multi-hot, fall back to BCE.
+            if isinstance(criterion, nn.CrossEntropyLoss) and targets.dim() > 1:
+                if logits.shape != targets.shape:
+                    # Align logits to target shape when num_classes differs (e.g., default model classes vs config)
+                    if logits.shape[1] > targets.shape[1]:
+                        logits = logits[:, :targets.shape[1]]
+                    elif logits.shape[1] < targets.shape[1]:
+                        targets = targets[:, :logits.shape[1]]
+                loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
+            else:
+                loss = criterion(logits, targets)
             if is_train:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -68,8 +83,10 @@ def _run_epoch(model: nn.Module,
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
                 optimizer.step()
             total_loss += loss.item() * inputs.size(0)
-            preds.append(torch.argmax(logits.detach(), dim=1))
-            trues.append(targets.detach())
+            probs = torch.sigmoid(logits.detach())
+            pred_labels = (probs >= 0.5).float()
+            preds.append(pred_labels)
+            trues.append(targets.detach().float())
     preds_cat = torch.cat(preds) if preds else torch.empty(0)
     trues_cat = torch.cat(trues) if trues else torch.empty(0)
     metrics = _compute_binary_metrics(preds_cat, trues_cat)
@@ -232,12 +249,15 @@ def run_kfold_training(k: int,
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             ckpt_path = output_dir / f"tinyglassnet_fold{fold}.pt"
+            num_classes = getattr(model, "classifier", None)
+            num_classes = getattr(num_classes, "out_features", None) if num_classes is not None else None
             torch.save(
                 {
                     "model_state_dict": best_state["model"],
                     "val_metrics": best_state.get("val_metrics", {}),
                     "fold": fold,
                     "train_folds": train_folds,
+                    "num_classes": num_classes,
                 },
                 ckpt_path,
             )

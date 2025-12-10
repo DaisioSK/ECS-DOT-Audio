@@ -12,11 +12,27 @@ def confusion_matrix(preds: torch.Tensor,
                      targets: torch.Tensor,
                      num_classes: int = 2,
                      normalize: bool = False) -> np.ndarray:
-    """Compute confusion matrix from prediction/target tensors."""
-    preds_np = preds.view(-1).cpu().numpy()
-    targets_np = targets.view(-1).cpu().numpy()
+    """Compute confusion matrix; supports multi-hot/single-logit binary by collapsing to class ids."""
+    preds = preds.detach().cpu()
+    targets = targets.detach().cpu()
+
+    def _collapse_to_class(x: torch.Tensor) -> np.ndarray:
+        # If already 1D integer, return directly
+        if x.dim() == 1:
+            return x.numpy().astype(int)
+        # Single-logit binary case: treat >=0.5 as positive class=1 else 0
+        if x.shape[1] == 1 and num_classes == 2:
+            return (x[:, 0] >= 0.5).numpy().astype(int)
+        # Multi-class/multi-hot: use argmax
+        return torch.argmax(x, dim=1).numpy().astype(int)
+
+    preds_np = _collapse_to_class(preds)
+    targets_np = _collapse_to_class(targets)
+
     matrix = np.zeros((num_classes, num_classes), dtype=np.float32)
     for p, t in zip(preds_np, targets_np):
+        if t >= num_classes or p >= num_classes:
+            continue
         matrix[t, p] += 1
     if normalize:
         row_sums = matrix.sum(axis=1, keepdims=True) + 1e-8

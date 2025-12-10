@@ -6,11 +6,13 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from .config import NUM_CLASSES
+
 
 class TinyGlassNet(nn.Module):
     """Compact CNN with only Conv/Pool/ReLU/FC blocks."""
 
-    def __init__(self, in_channels: int = 1, base_channels: int = 16, num_classes: int = 2):
+    def __init__(self, in_channels: int = 1, base_channels: int = 16, num_classes: int = NUM_CLASSES):
         super().__init__()
         c1 = base_channels
         c2 = base_channels * 2

@@ -29,11 +29,18 @@ WINDOW_SECONDS = 1.0
 WINDOW_HOP = 0.5
 SEED = 42
 
-POSITIVE_LABELS = {
-    "glass_breaking": "glass_breaking",
-}
+# Label configuration
+# Canonical target labels (multi-label ready). Default includes glass only; gunshot can be appended.
+TARGET_LABELS = ["glass"]
+LABEL_TO_ID = {label: idx for idx, label in enumerate(TARGET_LABELS)}
+ID_TO_LABEL = {idx: label for label, idx in LABEL_TO_ID.items()}
+NUM_CLASSES = len(TARGET_LABELS)
 BACKGROUND_LABEL = "background"
 BACKGROUND_MULTIPLIER = 3
+# Mapping from dataset categories to canonical labels (ESC-50 glass -> "glass").
+POSITIVE_LABELS = {
+    "glass_breaking": "glass",
+}
 
 # Case study / event detection defaults
 CASE_STUDY_DIR = CACHE_DIR / "case_study"

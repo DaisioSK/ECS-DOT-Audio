@@ -11,10 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from .config import POSITIVE_LABELS
-
-GLASS_LABEL = list(POSITIVE_LABELS.values())[0]
-LABEL_TO_ID = {GLASS_LABEL: 1, "background": 0}
+from .config import LABEL_TO_ID, NUM_CLASSES
 
 
 def balance_folds(index_df: pd.DataFrame,
@@ -24,14 +21,20 @@ def balance_folds(index_df: pd.DataFrame,
     rng = np.random.default_rng(random_state)
     balanced_parts = []
     for fold_id, fold_df in index_df.groupby("fold_id"):
-        glass_df = fold_df[fold_df["label"] == GLASS_LABEL]
-        bg_df = fold_df[fold_df["label"] != GLASS_LABEL]
-        desired_bg = int(round(len(glass_df) * (1 - target_ratio) / target_ratio)) if len(glass_df) else 0
+        if "label_ids" not in fold_df.columns:
+            fold_df = fold_df.copy()
+            fold_df["label_ids"] = fold_df["label"].apply(
+                lambda lab: [LABEL_TO_ID[lab]] if lab in LABEL_TO_ID else []
+            )
+        pos_mask = fold_df["label_ids"].apply(lambda ids: bool(ids))
+        pos_df = fold_df[pos_mask]
+        bg_df = fold_df[~pos_mask]
+        desired_bg = int(round(len(pos_df) * (1 - target_ratio) / target_ratio)) if len(pos_df) else 0
         if len(bg_df) > desired_bg > 0:
             bg_sample = bg_df.sample(n=desired_bg, random_state=random_state)
         else:
             bg_sample = bg_df
-        balanced_parts.append(pd.concat([glass_df, bg_sample], ignore_index=True))
+        balanced_parts.append(pd.concat([pos_df, bg_sample], ignore_index=True))
     if not balanced_parts:
         return index_df.copy()
     return pd.concat(balanced_parts, ignore_index=True)
@@ -40,7 +43,7 @@ def balance_folds(index_df: pd.DataFrame,
 @dataclass
 class MelEntry:
     path: Path
-    label_id: int
+    label_ids: List[int]
 
 
 class MelDataset(Dataset):
@@ -49,8 +52,10 @@ class MelDataset(Dataset):
     def __init__(self, index_df: pd.DataFrame, max_items: int | None = None):
         entries: List[MelEntry] = []
         for _, row in index_df.iterrows():
-            label_id = LABEL_TO_ID.get(row["label"], 0)
-            entries.append(MelEntry(path=Path(row["path"]), label_id=label_id))
+            label_ids = row.get("label_ids", [])
+            if not isinstance(label_ids, (list, tuple, np.ndarray)):
+                label_ids = [LABEL_TO_ID.get(row.get("label"), -1)]
+            entries.append(MelEntry(path=Path(row["path"]), label_ids=list(label_ids)))
         if max_items is not None:
             entries = entries[:max_items]
         self.entries = entries
@@ -58,11 +63,15 @@ class MelDataset(Dataset):
     def __len__(self) -> int:
         return len(self.entries)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         entry = self.entries[idx]
         mel = np.load(entry.path)
         mel_tensor = torch.from_numpy(mel).float()
-        return mel_tensor.unsqueeze(0), entry.label_id
+        target = torch.zeros(NUM_CLASSES, dtype=torch.float32)
+        for lid in entry.label_ids:
+            if 0 <= lid < NUM_CLASSES:
+                target[lid] = 1.0
+        return mel_tensor.unsqueeze(0), target
 
 
 def load_index_df(index_path: str | Path) -> pd.DataFrame:
@@ -80,7 +89,7 @@ def subset_by_folds(index_df: pd.DataFrame, folds: Sequence[int]) -> pd.DataFram
     return index_df[index_df["fold_id"].isin(folds)].reset_index(drop=True)
 
 
-def pad_mel_batch(batch: List[Tuple[torch.Tensor, int]],
+def pad_mel_batch(batch: List[Tuple[torch.Tensor, torch.Tensor]],
                   max_frames: int | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
     """Pad or crop mel tensors in a batch to a common time length."""
     if not batch:
@@ -97,7 +106,7 @@ def pad_mel_batch(batch: List[Tuple[torch.Tensor, int]],
             mel = F.pad(mel, (0, target_frames - frames))
         padded.append(mel)
     batch_tensor = torch.stack(padded, dim=0)
-    label_tensor = torch.tensor(labels, dtype=torch.long)
+    label_tensor = torch.stack(labels, dim=0)
     return batch_tensor, label_tensor
 
 

@@ -10,6 +10,7 @@ import onnxruntime as ort
 import torch
 
 from .models import TinyGlassNet
+from .config import NUM_CLASSES
 
 
 @dataclass
@@ -20,14 +21,16 @@ class InferenceResult:
 
 
 def load_torch_checkpoint(checkpoint_path: str | Path,
-                          device: torch.device | str = "cpu") -> tuple[TinyGlassNet, Dict]:
+                          device: torch.device | str = "cpu",
+                          num_classes: int | None = None) -> tuple[TinyGlassNet, Dict]:
     """Load TinyGlassNet checkpoint and return model + payload."""
     checkpoint_path = Path(checkpoint_path)
     payload = torch.load(checkpoint_path, map_location=device)
     state_dict = payload.get("model_state_dict") or payload.get("model")
     if state_dict is None:
         raise KeyError("Checkpoint missing 'model_state_dict' or 'model' keys.")
-    model = TinyGlassNet()
+    inferred_classes = num_classes or payload.get("num_classes") or NUM_CLASSES
+    model = TinyGlassNet(num_classes=int(inferred_classes))
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
@@ -49,13 +52,14 @@ def load_mel_batch(index_df, max_items: int | None = None) -> torch.Tensor:
 
 def run_torch_inference(model: TinyGlassNet,
                         batch: torch.Tensor,
-                        device: torch.device | str = "cpu") -> InferenceResult:
+                        device: torch.device | str = "cpu",
+                        threshold: float | None = 0.5) -> InferenceResult:
     """Run forward pass on a batch of mel tensors."""
     batch = batch.to(device)
     with torch.inference_mode():
         logits = model(batch)
-        probs = torch.softmax(logits, dim=1)
-        preds = torch.argmax(probs, dim=1)
+        probs = torch.sigmoid(logits)
+        preds = (probs >= threshold).float() if threshold is not None else probs
     return InferenceResult(
         logits=logits.cpu(),
         probs=probs.cpu(),
@@ -73,13 +77,14 @@ def create_onnx_session(onnx_path: str | Path,
 
 
 def run_onnx_inference(session: ort.InferenceSession,
-                       batch: torch.Tensor) -> InferenceResult:
+                       batch: torch.Tensor,
+                       threshold: float | None = 0.5) -> InferenceResult:
     """Run ONNX model on cpu batch tensor."""
     inputs = {"input": batch.numpy()}
     logits_np = session.run(["logits"], inputs)[0]
     logits = torch.from_numpy(logits_np)
-    probs = torch.softmax(logits, dim=1)
-    preds = torch.argmax(probs, dim=1)
+    probs = torch.sigmoid(logits)
+    preds = (probs >= threshold).float() if threshold is not None else probs
     return InferenceResult(logits=logits, probs=probs, preds=preds)
 
 

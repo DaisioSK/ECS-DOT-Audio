@@ -348,3 +348,51 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 ### TODO / 后续
 - 根据误报类别（如 keyboard_typing/crow/chainsaw/door_wood_knock/cough）调整权重或追加硬负样本回灌；评估分桶结果后再定。
 - 如需进一步清洗 GT，可继续用 IGNORE 列表人工筛除；若背景探针仍高误报，考虑在训练增广中对易误判类加量。
+
+
+## 2025-12-10 12:04:33 +08 Session (Multi-label refactor & notebooks hardening)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3 持续；面向后续“玻璃+枪声”多标签检测的基建升级与 notebook 打通。
+- **Task**：Task-Eng：多标签兼容改造（config/缓存/数据集/训练/推理），修复 notebook 运行问题，为引入 gunshot 做准备。
+
+### TL;DR
+- 将全链路从单标签改为可多标签（sigmoid+BCE），索引/数据集/模型/训练/推理/事件检测全部兼容；默认仍为 glass 单类，保证旧流程可跑。
+- 修复 train/infer 可视化等 notebook 报错（CrossEntropy+多热、越界、布局告警、未定义变量），四个 notebook 全量跑通。
+
+### 项目状态（宏观→微观）
+- **宏观**：数据管线稳定，训练/推理/事件检测 notebook 可跑；基建已支持多标签输出，下一步可无缝接入 gunshot。
+- **配置**：`TARGET_LABELS/LABEL_TO_ID/NUM_CLASSES` 统一标签空间，默认 `["glass"]`；可扩展 gunshot 后重建 cache/训练。
+- **缓存/索引**：CacheEntry 存储 `labels/label_ids/label`（背景为空），索引兼容旧字段；窗口/增强逻辑不变。
+- **数据集/平衡**：MelDataset 输出 multi-hot，balance_folds 按多标签正例分层；pad_mel_batch 兼容新格式。
+- **模型/训练**：TinyGlassNet 输出维度随 NUM_CLASSES；训练指标为宏 P/R/F1，CrossEntropy+多热自动回退 BCE，防维度错位。
+- **推理/事件检测**：sigmoid 概率 + per-class 阈值；事件检测按标签 id 取玻璃概率，避免越界。
+- **Notebook**：prepare/train/infer/case_study 均可跑；infer 按标签映射取概率；可视化布局告警已处理。
+
+### 本次完成
+1. 多标签基建：config 定义标签映射，CacheEntry/索引加入 labels/label_ids；MelDataset multi-hot；TinyGlassNet num_classes=NUM_CLASSES；training/inference 改 sigmoid/BCE 兼容逻辑。
+2. 错误修复：训练阶段 CE+多热维度不匹配自动对齐；metrics 混淆矩阵兼容单 logit/多热；infer notebook 越界/未定义 prob_glass；可视化 tight_layout/constrained_layout 警告处理。
+3. Notebook 打通：四个 notebook 在默认 glass 单类下全程可跑，预测/可视化正常。
+
+### 关键改动与原因
+- **标签抽象**：`TARGET_LABELS/LABEL_TO_ID` 提前为多标签铺路，避免后续 gunshot 侵入式修改；NUM_CLASSES 驱动模型/损失。
+- **缓存索引**：记录 label_ids，多标签场景无需拆表；背景为空列表，保持兼容旧字段 `label` 便于 notebook 继续使用。
+- **训练容错**：CrossEntropy+多热场景自动使用 BCE 并对齐 logits/targets，防止 notebook 旧代码崩溃；指标改宏平均，匹配多标签特性。
+- **推理/事件检测**：sigmoid + 阈值，按标签 id 取列，避免 hard-coded `[:,1]` 越界；事件检测取玻璃列安全。
+- **可视化稳定性**：混淆矩阵支持多热/单 logit；bar 注释过滤空柱并 clip，避免文本飞出；布局只用一种方式避免警告。
+
+### Insight / 巧思
+- 先保持 `TARGET_LABELS=["glass"]` 跑通全链路，再扩展 gunshot，降低一次性大改风险。
+- 保留 `label` 主字段兼容旧 notebook，同时引入 `label_ids` 供新逻辑，平滑迁移。
+- 对第三方 notebook 旧习惯（CE+argmax、固定第二列概率）提供兜底，确保训练/推理不中断，同时指向推荐用法（BCE+sigmoid+阈值）。
+
+### 使用示例 / 验证
+- 默认单类：按原流程 `prepare.ipynb` → `train.ipynb` → `infer.ipynb` → `case_study.ipynb`，无需改参数即可跑通。
+- 推理示例（更新后单元）：`prob_glass = probs[:, LABEL_TO_ID["glass"]]`，`pred_glass = (prob_glass >= THRESHOLD)`，`pred_label` 填充到 `pred_df`。
+- 可视化：使用 `plt.subplots(...); plt.subplots_adjust(...)`，避免叠加 constrained_layout + tight_layout。
+
+### TODO / Improvements（继承与新增）
+- 扩展标签：将 `TARGET_LABELS` 设为 `["glass","gunshot"]`，生成 gunshot meta（可含 weapon_id），重建 cache/index，复跑 prepare/train/infer/case_study。
+- 事件检测多标签化：按类阈值/合并/可视化，支持枪声混音与评估分桶。
+- 增强/训练细节：为枪声配置更保守的 stretch/shift；按类阈值/温度标定；per-class class weight。
+- 最小单测：label map、dataset target shape、training 前向、metrics 多标签、事件检测概率索引；清理运行产物忽略规则。

@@ -11,6 +11,8 @@ import pandas as pd
 from .config import (
     BACKGROUND_LABEL,
     CACHE_DIR,
+    TARGET_LABELS,
+    LABEL_TO_ID,
     POSITIVE_LABELS,
     SR,
     SEED,
@@ -27,7 +29,7 @@ GLASS_PIPELINE_PLAN: Dict[str, Dict[str, int]] = {
     "gain_mix": {"copies": 1},
     "stretch_filter": {"copies": 1},
 }
-GLASS_LABELS: List[str] = list(POSITIVE_LABELS.values())
+GLASS_LABELS: List[str] = list(TARGET_LABELS)
 
 
 @dataclass
@@ -35,7 +37,9 @@ class CacheEntry:
     """Metadata describing a cached mel tile."""
 
     path: str
-    label: str
+    labels: List[str]
+    label_ids: List[int]
+    label: str  # primary label for backward compatibility
     fold_id: int
     source_filename: str
     clip_id: str
@@ -77,6 +81,29 @@ def sample_background_chunk(dataset_df: pd.DataFrame,
     return y_bg[start:start + length]
 
 
+def _encode_labels(raw_label: str | Sequence[str] | None) -> tuple[List[str], List[int], str]:
+    """Normalize raw label input into canonical lists and primary label."""
+    if raw_label is None:
+        return [], [], BACKGROUND_LABEL
+    if isinstance(raw_label, str):
+        labels = [] if raw_label == BACKGROUND_LABEL else [raw_label]
+    else:
+        labels = [lab for lab in raw_label if lab != BACKGROUND_LABEL]
+    # Deduplicate while preserving order
+    seen = set()
+    deduped: List[str] = []
+    for lab in labels:
+        if lab in seen:
+            continue
+        if lab not in LABEL_TO_ID:
+            raise KeyError(f"Unknown label '{lab}' not in LABEL_TO_ID")
+        seen.add(lab)
+        deduped.append(lab)
+    label_ids = [LABEL_TO_ID[lab] for lab in deduped]
+    primary = deduped[0] if deduped else BACKGROUND_LABEL
+    return deduped, label_ids, primary
+
+
 def _cache_glass_row(row: pd.Series,
                      pipeline_plan: Dict[str, Dict[str, int]],
                      background_df: pd.DataFrame,
@@ -98,17 +125,19 @@ def _cache_glass_row(row: pd.Series,
     )
     clip_id = Path(row["filename"]).stem
     fold_id = int(row.get("fold_id", -1))
-    label = row["target_label"]
+    labels, label_ids, primary_label = _encode_labels(row["target_label"])
     entries: List[CacheEntry] = []
     base_count = 0
 
     for win_idx, window in enumerate(windows):
         base_suffix = f"base_w{win_idx:02d}"
-        base_path = _save_window(window, label, clip_id, fold_id, base_suffix, cache_dir)
+        base_path = _save_window(window, primary_label, clip_id, fold_id, base_suffix, cache_dir)
         entries.append(
             CacheEntry(
                 path=str(base_path),
-                label=label,
+                labels=labels,
+                label_ids=label_ids,
+                label=primary_label,
                 fold_id=fold_id,
                 source_filename=row["filename"],
                 clip_id=clip_id,
@@ -132,7 +161,7 @@ def _cache_glass_row(row: pd.Series,
                 aug_suffix = f"{pipeline_name}_w{win_idx:02d}_c{copy_idx:02d}"
                 aug_path = _save_window(
                     augmented.audio,
-                    label,
+                    primary_label,
                     clip_id,
                     fold_id,
                     aug_suffix,
@@ -141,7 +170,9 @@ def _cache_glass_row(row: pd.Series,
                 entries.append(
                     CacheEntry(
                         path=str(aug_path),
-                        label=label,
+                        labels=labels,
+                        label_ids=label_ids,
+                        label=primary_label,
                         fold_id=fold_id,
                         source_filename=row["filename"],
                         clip_id=clip_id,
@@ -162,15 +193,17 @@ def _cache_background_row(row: pd.Series,
     windows = generate_aligned_windows(row, align_labels=list(align_labels), energy_threshold=energy_threshold)
     clip_id = Path(row["filename"]).stem
     fold_id = int(row.get("fold_id", -1))
-    label = row["target_label"]
+    labels, label_ids, primary_label = _encode_labels(row.get("target_label"))
     entries: List[CacheEntry] = []
     for win_idx, window in enumerate(windows):
         suffix = f"base_w{win_idx:02d}"
-        cache_path = _save_window(window, label, clip_id, fold_id, suffix, cache_dir)
+        cache_path = _save_window(window, primary_label, clip_id, fold_id, suffix, cache_dir)
         entries.append(
             CacheEntry(
                 path=str(cache_path),
-                label=label,
+                labels=labels,
+                label_ids=label_ids,
+                label=primary_label,
                 fold_id=fold_id,
                 source_filename=row["filename"],
                 clip_id=clip_id,
