@@ -1,6 +1,7 @@
 /data/audio
 /cache/mel64
-/.ipynb_checkpoints
-**/.ipynb_checkpoints/
 /ESC-50-master
-/src/__pycache__
+# /data-gunshot
+
+**/.ipynb_checkpoints/
+**/__pycache__
