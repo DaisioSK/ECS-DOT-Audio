@@ -11,6 +11,7 @@ import librosa
 
 from .config import (
     AUDIO_DIR,
+    PROJECT_ROOT,
     HOP_LENGTH,
     META_FILE,
     N_FFT,
@@ -54,13 +55,19 @@ def build_dataset(meta_df: pd.DataFrame,
 
 def audio_path(row: pd.Series) -> Path:
     """Resolve on-disk path for the audio file described by a metadata row."""
+    # Prefer explicit filepath if present
+    if 'filepath' in row and pd.notna(row['filepath']):
+        p = Path(row['filepath'])
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
+        return p
     return AUDIO_DIR / row['filename']
 
 
 def load_audio(row: pd.Series, sr: int = SR) -> Tuple[np.ndarray, int]:
-    """Load an audio clip as mono float32 at the requested sampling rate."""
+    """Load an audio clip resampled to `sr` and downmixed to mono float32."""
     path = audio_path(row)
-    y, sr_out = librosa.load(path, sr=sr)
+    y, sr_out = librosa.load(path, sr=sr, mono=True)
     return y, sr_out
 
 

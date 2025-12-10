@@ -434,3 +434,41 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - prepare 入口改为合并多 meta，缺失 fold_id 的按文件散列补齐；`TARGET_LABELS=["glass","gunshot"]` 并映射 glass_breaking→glass，gunshot→gunshot。
 - 重建 cache/index 后复跑 train/infer/case_study，验证多源输入。
 - 后续新增数据集按同 schema 生成 meta 并追加到合并列表；如需去重，可用 md5 过滤。 
+
+
+## 2025-12-10 18:06:26 +08 Session (22.05k mono unify, resample reuse, stratified folds)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3；聚焦多源（ESC-50/gunshot/freesound）音频统一与折分均衡，为双标签玻璃+枪声训练/检测打底。
+- **Task**：统一采样率/声道并复用已有重采样结果，分层折分（含 weapon），Notebook 内嵌试听与路径修复。
+
+### TL;DR
+- `prepare_new.ipynb` 重建：多源 meta 去重/过滤 → 枪声均匀抽样 → 重采样 22.05k mono（复用已存在） → 分层折分（label+weapon） → SR/声道检查 → 原/后试听。后续流程提示保留。
+- 增加/修复 helper：`stratified_folds`、gunshot 均匀抽样、路径解析、`plot_wave_and_mel` 灵活调用；`load_audio` 显式重采样+下混。
+
+### 项目状态（宏观→微观）
+- **音频统一**：通过 `load_audio(sr=SR, mono=True)` 与 Notebook 内置重采样，将清洗后的所有音频统一为 22.05k mono，重采样输出在 `cache/data_resampled`，可复用避免重复耗时。
+- **分折均衡**：按 `canonical_label + weapon_id` 分层轮询，折分表为标签×fold，枪声更均匀分配。
+- **Notebook**：结构清晰、双语说明；包含去重/过滤、重采样（复用）、分折、SR/声道检查、A/B 试听；后续步骤（能量分析→窗口/增强→缓存→平衡→QA→导出索引）待继续。
+
+### 本次完成
+1. 重采样链路：Notebook 内实现 22.05k mono 重采样，优先复用 `cache/data_resampled`，缺失才写入 16-bit PCM；`load_audio` 固定 `mono=True`。
+2. 分层折分：新增 `stratified_folds`，按标签+weapon 轮询分配 fold，输出标签×fold 表。
+3. 试听与检查：SR/声道检查单元；A/B 播放原始（若存在）vs 重采样（内嵌 Audio）；路径解析修复支持 `filepath` 相对项目根。
+4. 辅助修复：`plot_wave_and_mel` 支持 row 或 (y, sr) + 自定义标题；`meta_utils` 增 dedup、gunshot 均匀抽样；`data_utils` 兼容 filepath 路径。
+
+### 关键改动与原因
+- 22.05k mono：保证训练/推理一致、贴合 Edge 资源；复用已有重采样文件减少重复耗时。
+- 分层折分：避免 gunshot 集中某折，按 weapon 打散，交叉验证更稳。
+- 内嵌试听：直接在 Notebook 对比前/后，便于评估音质损失，无需手工导出。
+- 路径/加载修复：新 meta 使用 filepath，相对 PROJECT_ROOT 解析，避免加载错误。
+
+### 典型使用 / 验证
+- 运行 `prepare_new.ipynb`：执行至重采样（写入/复用 `cache/data_resampled`）、分折表查看均衡性、SR/声道检查确认 22.05k/mono、试听单元播放原/后对比。
+- 分折表：标签为行、fold 为列，含 total；查看 gunshot 分布是否均匀。
+
+### TODO / Improvements
+- 继续补齐后续阶段：能量分析 → 窗口/增强配置 → smoke/full 缓存 → 折平衡（3:3:4）→ QA 抽样/试听 → 导出平衡索引。
+- 如需精度对比，可试 44.1k 小规模实验，权衡高频信息 vs 算力；试听可保留 stereo，但训练/推理保持统一输入。
+
+
