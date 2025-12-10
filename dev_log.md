@@ -396,3 +396,41 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 事件检测多标签化：按类阈值/合并/可视化，支持枪声混音与评估分桶。
 - 增强/训练细节：为枪声配置更保守的 stretch/shift；按类阈值/温度标定；per-class class weight。
 - 最小单测：label map、dataset target shape、training 前向、metrics 多标签、事件检测概率索引；清理运行产物忽略规则。
+
+
+## 2025-12-10 12:25:00 +08 Session (Data meta unification & ingestion prep)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3；为“玻璃+枪声”多标签训练/评估做数据源统一。
+- **Task**：统一 meta schema，重建 ESC-50/gunshot/freesound 元数据，整理数据目录，为 prepare 多源读取打底。
+
+### TL;DR
+- 建立统一 meta schema（含 sno/filepath/label/source/fold/duration/sr/channels/bit_depth/md5/extra_meta），重建 ESC-50 与 gunshot kaggle 元数据，新增 freesound 少量玻璃音频 meta 生成脚本。
+- 数据目录与 meta 命名对齐（esc50, gunshot_kaggle, freesound），后续 prepare 可直接合并多源 meta。
+
+### 项目状态（宏观→微观）
+- **宏观**：数据源已统一目录/命名，元数据 schema 统一；多标签基建已就绪，等待多源 meta 作为输入。
+- **数据/meta**：`data/meta/esc50.csv`（统一格式），`data/meta/gunshot_kaggle.csv`（gunshot+weapon_id），`data/meta/freesound.csv`（少量玻璃）；均含时长/采样率/声道/位深/md5。
+- **工具**：`data/meta/build_freesound_meta.py` 可全量重建 freesound meta；ESC-50/gunshot meta 由脚本生成（基于 stdlib wave+hashlib）。
+- **目录结构**：`data/esc50`, `data/gunshot_kaggle`, `data/freesound` 与 `source`/meta 文件名一致。
+
+### 本次完成
+1. 统一 meta schema（CSV）：必选 sno/filepath/label/source/fold_id/duration_sec/duration_samples/sr/channels/bit_depth/md5/extra_meta。
+2. 重建 ESC-50 元数据：`data/meta/esc50.csv`（2000 行，duration_sec 保留 1 位小数，source=esc50，fold=官方）。
+3. 构建 gunshot kaggle 元数据：`data/meta/gunshot_kaggle.csv`（851 行，label=gunshot，source=gunshot_kaggle，extra_meta=weapon_id）。
+4. 新增 freesound 元数据脚本：`data/meta/build_freesound_meta.py`，生成 `data/meta/freesound.csv`（label=glass，source=freesound，全量重建）。
+
+### 关键改动与原因
+- 统一 schema 便于多源合并、任务侧灵活定义正/背景，md5/格式信息有助去重与清洗。
+- 目录名=meta 文件名=source，降低准备/合并时的匹配复杂度。
+- 使用 stdlib wave/hashlib 生成 meta，避免额外依赖；duration_sec 统一为 1 位小数，便于阅读/过滤。
+
+### 使用示例 / 验证
+- 元数据文件：`data/meta/esc50.csv`, `data/meta/gunshot_kaggle.csv`, `data/meta/freesound.csv`。
+- 合并读取示例（待在 prepare 中接入）：`meta_df = pd.concat([pd.read_csv(p) for p in meta_files], ignore_index=True)`。
+- freesound 增量：在 `data/freesound/` 放新 wav，重跑 `python3 data/meta/build_freesound_meta.py`。
+
+### TODO / Next
+- prepare 入口改为合并多 meta，缺失 fold_id 的按文件散列补齐；`TARGET_LABELS=["glass","gunshot"]` 并映射 glass_breaking→glass，gunshot→gunshot。
+- 重建 cache/index 后复跑 train/infer/case_study，验证多源输入。
+- 后续新增数据集按同 schema 生成 meta 并追加到合并列表；如需去重，可用 md5 过滤。 

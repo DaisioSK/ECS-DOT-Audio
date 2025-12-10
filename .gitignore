@@ -1,7 +1,12 @@
-/data/audio
+data/**/*.wav
+data/**/*.flac
+
 /cache/mel64
 /ESC-50-master
 # /data-gunshot
+
+
+
 
 **/.ipynb_checkpoints/
 **/__pycache__

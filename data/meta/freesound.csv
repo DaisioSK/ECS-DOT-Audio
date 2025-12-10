@@ -1,0 +1,10 @@
+sno,filepath,label,source,fold_id,duration_sec,duration_samples,sr,channels,bit_depth,md5,extra_meta
+1,data/freesound/glass_ext_01.wav,glass,freesound,,7.4,328499,44100,2,16,6578ba69423697b5c6b91a184d6a366d,
+2,data/freesound/glass_ext_03.wav,glass,freesound,,5.0,241920,48000,1,24,aaef010fb09b318beb5c752500370077,
+3,data/freesound/glass_ext_04.wav,glass,freesound,,1.0,45573,44100,2,16,931047ef196804c225f955c49f3f9bb4,
+4,data/freesound/glass_ext_05.wav,glass,freesound,,2.0,190461,96000,2,24,ea57c932120b5801bc25c2be2fe3857e,
+5,data/freesound/glass_ext_06.wav,glass,freesound,,6.5,312000,48000,2,24,1675737c0719348a1e76a143fcf5bad9,
+6,data/freesound/glass_ext_07.wav,glass,freesound,,1.1,52990,48000,2,16,52530e27dd782375a35dd1eec3126aa8,
+7,data/freesound/glass_ext_08.wav,glass,freesound,,2.5,120000,48000,2,24,68e465fdf1ca0086def32c5425cd2d49,
+8,data/freesound/glass_ext_09.wav,glass,freesound,,2.1,103178,48000,2,16,ed4a213de63928483abd9f0ea20c7fec,
+9,data/freesound/glass_ext_10.wav,glass,freesound,,1.9,83986,44100,2,16,3753cdc43141cbc91d0a845bba269fdf,
