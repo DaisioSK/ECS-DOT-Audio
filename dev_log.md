@@ -472,3 +472,35 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 如需精度对比，可试 44.1k 小规模实验，权衡高频信息 vs 算力；试听可保留 stereo，但训练/推理保持统一输入。
 
 
+## 2025-12-11 12:30:00 +08 Session (Audio resample & slicing QA)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3；专注音频统一与分窗质量，准备双标签（glass+gunshot）训练。
+- **Task**：统一 22.05k mono 输入、静音裁剪可选、分窗/能量分析与 QA 试听工具完善，Notebook 对齐旧版流程。
+
+### TL;DR
+- 全链路重采样到 22.05k + mono（Notebook 内完成，输出至 `cache/data_resampled`），并提供前后试听对比。
+- 分窗/能量分析强化：支持可选静音裁剪、窗口可视化 QA、10 窗口试听；多标签 glass+gunshot。
+- Notebook 重建，保留加载/映射/抽样/重采样/分折/能量/窗口配置/分窗统计/试听等步骤，后续缓存/平衡/QA 待续。
+
+### 变更详情
+- **数据加载/重采样**：`load_audio` 固定重采样+mono；`prepare_new.ipynb` 将清洗后的音频重采样为 22.05k mono，写入 `cache/data_resampled/...`，生成 `resampled_df`（sr=22050, ch=1）。
+- **静音裁剪选项**：`generate_aligned_windows` 新增 `trim_silence_before` 等参数；默认可开/关，Notebook 中参数化（TRIM_SILENCE_BEFORE=True 等）。
+- **能量/分窗分析**：扩展到 glass+gunshot，输出时长与 RMS 统计，绘制时长/RMS 分布；窗口 QA 可视化（波形+RMS+窗口边界），统计每 clip 窗口数。
+- **试听**：Notebook 内直接播放原始 vs 重采样音频；新增“播放 10 个事件窗口”快速听检切片质量。
+- **Notebook 结构**：覆盖加载/映射/去重（md5、filepath）、枪声均匀抽样（60 条）、时长过滤、重采样、分折、重采样检查、随机样本可视化、能量分析、窗口配置、分窗统计、试听。后续增强/缓存/平衡/QA/导出待补。
+- **工具增强**：`data_utils` 增加 `trim_silence`，路径解析优先 filepath；`viz.plot_wave_and_mel` 支持 (y, sr) 调用与自定义标题。
+
+### Insight / 原因
+- 22.05k mono 统一输入以匹配 Edge 约束；提供前后试听验证重采样影响。
+- 静音裁剪+能量/峰值筛选避免玻璃长尾静音污染，窗口级标签更贴近实时滑窗推理。
+- 可视化和听检帮助快速验证阈值与分窗质量，避免整段全真导致误报。
+
+### 使用示例
+- 运行 `prepare_new.ipynb`：重采样→分折→能量/窗口分析→窗口试听；音频输出 `cache/data_resampled`。
+- 分窗调用：`generate_aligned_windows(..., trim_silence_before=TRIM_SILENCE_BEFORE, trim_top_db=TRIM_TOP_DB, ...)`。
+
+### TODO / Next
+- 补齐增强计划、smoke/full 缓存、折内平衡（3:3:4）、QA 抽样/背景试听、索引导出。
+- 观察静音裁剪+阈值对窗口数量/正样本纯度的影响，必要时调整参数或 per-clip 窗口上限。
+- 评估重采样音质对模型的影响，如需更高保真试听，可保留原始播放但训练/推理保持 22.05k mono。 

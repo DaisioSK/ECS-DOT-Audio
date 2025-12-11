@@ -71,6 +71,25 @@ def load_audio(row: pd.Series, sr: int = SR) -> Tuple[np.ndarray, int]:
     return y, sr_out
 
 
+def trim_silence(y: np.ndarray,
+                 sr: int,
+                 top_db: float = 20.0,
+                 min_keep_seconds: float = 0.0) -> np.ndarray:
+    """Remove silent intervals below threshold; drop very short kept chunks."""
+    intervals = librosa.effects.split(y, top_db=top_db)
+    if intervals.size == 0:
+        return y
+    keep = []
+    min_keep = int(min_keep_seconds * sr)
+    for start, end in intervals:
+        if end - start < min_keep:
+            continue
+        keep.append(y[start:end])
+    if not keep:
+        return y
+    return np.concatenate(keep)
+
+
 def log_mel_spectrogram(y: np.ndarray,
                         sr: int,
                         n_fft: int = N_FFT,
@@ -144,9 +163,14 @@ def generate_aligned_windows(row: pd.Series,
                              extra_shifts: List[float] | None = None,
                              energy_threshold: float = 0.2,
                              peak_ratio_threshold: float = 0.7,
-                             front_peak_ratio: float = 0.5) -> List[np.ndarray]:
+                             front_peak_ratio: float = 0.5,
+                             trim_silence_before: bool = False,
+                             trim_top_db: float = 20.0,
+                             trim_min_keep_seconds: float = 0.0) -> List[np.ndarray]:
     """Produce waveform windows for a row with energy filtering."""
     y, sr = load_audio(row)
+    if trim_silence_before:
+        y = trim_silence(y, sr, top_db=trim_top_db, min_keep_seconds=trim_min_keep_seconds)
     label = row['target_label']
     windows: List[np.ndarray] = []
     if label in align_labels:
