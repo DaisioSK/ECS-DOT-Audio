@@ -6,9 +6,11 @@ MOUNT_SRC ?= $(PROJECT_ROOT)
 MOUNT_DST ?= /workspace
 JUPYTER_PORT ?= 8888
 TEST_CMD ?= pytest -q
+CONVERT_DIR ?= data
+CONVERT_ARGS ?=
 DOCKER ?= docker
 
-.PHONY: build rebuild bash notebook test clean rm-image
+.PHONY: build rebuild bash notebook test convert-wav clean rm-image
 
 build:
 	$(DOCKER) build -t $(IMAGE_NAME) -f $(DOCKERFILE) $(PROJECT_ROOT)
@@ -34,6 +36,11 @@ test:
 	$(DOCKER) run --rm \
 		-v $(MOUNT_SRC):$(MOUNT_DST) \
 		$(IMAGE_NAME) bash -lc "cd $(MOUNT_DST) && $(TEST_CMD)"
+
+convert-wav:
+	$(DOCKER) run --rm \
+		-v $(MOUNT_SRC):$(MOUNT_DST) \
+		$(IMAGE_NAME) bash -lc "cd $(MOUNT_DST) && python3 convert_to_wav.py $(CONVERT_DIR) $(CONVERT_ARGS)"
 
 clean:
 	-$(DOCKER) rm -f $(CONTAINER_NAME) 2>/dev/null || true

@@ -35,7 +35,7 @@ from src.event_detection import (
     match_events_with_pairs,
     merge_events,
     mix_glass_on_bed,
-    predict_glass_probs,
+    predict_label_probs,
     sliding_log_mel_windows,
     smooth_probabilities,
 )
@@ -70,17 +70,20 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     }
     (out_dir / "run_config.json").write_text(json.dumps(snapshot, indent=2))
 
-    # Collect clips
-    external_dir = Path("data/external")
-    glass_paths = sorted(external_dir.glob("glass_ext_*"))
-    if not glass_paths and not background_only:
-        raise FileNotFoundError("No external glass clips found under data/external")
-    glass_specs = [ClipSpec(path=p, label=GLASS_LABEL, gain_db=cfg["glass_gain_db"]) for p in glass_paths]
-
     import pandas as pd
 
     meta_df = load_meta_files(CASE_STUDY_META_FILES)
     meta_df = map_canonical_labels(meta_df, label_map={}, target_labels=TARGET_LABELS)
+    pos_df = meta_df[meta_df["canonical_label"].isin(TARGET_LABELS)]
+    if pos_df.empty and not background_only:
+        raise RuntimeError("No positive clips found in meta files for case study.")
+    pos_specs = []
+    for _, row in pos_df.iterrows():
+        p = Path(row["filepath"])
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
+        pos_specs.append(ClipSpec(path=p, label=row["canonical_label"], gain_db=cfg["glass_gain_db"]))
+
     non_glass_df = meta_df[~meta_df["canonical_label"].isin(TARGET_LABELS)]
     bg_sample_n = max(18, len(glass_specs) * 4)
     
@@ -92,14 +95,12 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     else:
         bg_samples = non_glass_df.sample(n=bg_sample_n, random_state=seed, replace=len(non_glass_df) < bg_sample_n)
 
-    bg_specs = [
-        ClipSpec(
-            path=(PROJECT_ROOT / row["filepath"]) if not Path(row["filepath"]).is_absolute() else Path(row["filepath"]),
-            label="background",
-            gain_db=cfg["background_gain_db"],
-        )
-        for _, row in bg_samples.iterrows()
-    ]
+    bg_specs = []
+    for _, row in bg_samples.iterrows():
+        p = Path(row["filepath"])
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
+        bg_specs.append(ClipSpec(path=p, label="background", gain_db=cfg["background_gain_db"]))
 
     # Build bed
     bed = build_background_bed(
@@ -117,7 +118,7 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     else:
         audio, gt_events = mix_glass_on_bed(
             bed,
-            glass_specs,
+            pos_specs,
             sr=SR,
             start_offset_range=cfg["start_offset_range"],
             gap_range=cfg["gap_range"],
@@ -147,25 +148,38 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     onnx_path = Path("cache/experiments/tinyglassnet_best.onnx")
 
     model, _ = load_torch_checkpoint(ckpt_path, device=device)
-    torch_probs, _ = predict_glass_probs(batch, spans, model=model, device=device)
+    probs_dict, _ = predict_label_probs(batch, spans, labels=TARGET_LABELS, model=model, device=device)
 
     onnx_probs = None
     if onnx_path.exists():
         onnx_sess = create_onnx_session(onnx_path)
-        onnx_probs, _ = predict_glass_probs(batch, spans, session=onnx_sess, device="cpu")
+        onnx_probs, _ = predict_label_probs(batch, spans, labels=TARGET_LABELS, session=onnx_sess, device="cpu")
 
     # Smoothing
     smooth_k = int(cfg.get("smooth_k", 1) or 1)
-    torch_probs_smooth = smooth_probabilities(torch_probs, kernel_size=smooth_k)
+    torch_probs_smooth = {lab: smooth_probabilities(probs, kernel_size=smooth_k) for lab, probs in probs_dict.items()}
 
-    # Merge and eval
-    pred_events = merge_events(spans, torch_probs_smooth, threshold=cfg["threshold"], merge_gap=cfg["merge_gap"])
-    metrics = match_events(pred_events, gt_events, tolerance=cfg["tolerance"])
-    pairs, unmatched_gt, unmatched_pred = match_events_with_pairs(pred_events, gt_events, tolerance=cfg["tolerance"])
-
-    matched_gt_indices = [gt_events.index(gt) for gt, _, _ in pairs]
-    snr_recalls = bucket_recall_by_snr(gt_events, matched_gt_indices)
-    delay_buckets = bucket_delay(pairs)
+    # Merge and eval per label
+    pred_events = {}
+    metrics = {}
+    pairs_dict = {}
+    unmatched_gt = {}
+    unmatched_pred = {}
+    snr_recalls = {}
+    delay_buckets = {}
+    for lab in TARGET_LABELS:
+        gt_lab = [ev for ev in gt_events if ev.label == lab]
+        prob_lab = torch_probs_smooth.get(lab, [])
+        pred_lab = merge_events(spans, prob_lab, threshold=cfg["threshold"], merge_gap=cfg["merge_gap"])
+        pred_events[lab] = pred_lab
+        metrics[lab] = match_events(pred_lab, gt_lab, tolerance=cfg["tolerance"])
+        pairs, u_gt, u_pred = match_events_with_pairs(pred_lab, gt_lab, tolerance=cfg["tolerance"])
+        pairs_dict[lab] = pairs
+        unmatched_gt[lab] = u_gt
+        unmatched_pred[lab] = u_pred
+        matched_gt_indices = [gt_lab.index(gt) for gt, _, _ in pairs]
+        snr_recalls[lab] = bucket_recall_by_snr(gt_lab, matched_gt_indices)
+        delay_buckets[lab] = bucket_delay(pairs)
 
     # Persist results
     results = {
@@ -175,7 +189,7 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
         "pred_events": pred_events,
         "metrics": metrics,
         "spans": spans,
-        "torch_probs": torch_probs,
+        "torch_probs": probs_dict,
         "torch_probs_smooth": torch_probs_smooth,
         "onnx_probs": onnx_probs,
         "snr_recalls": snr_recalls,

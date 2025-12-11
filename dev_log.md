@@ -505,7 +505,7 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 观察静音裁剪+阈值对窗口数量/正样本纯度的影响，必要时调整参数或 per-clip 窗口上限。
 - 评估重采样音质对模型的影响，如需更高保真试听，可保留原始播放但训练/推理保持 22.05k mono。 
 
-## 2025-12-11 07:35:32 UTC Session (Multi-label prepare hardening & case study schema fix)
+## 2025-12-11 15:35:32 UTC Session (Multi-label prepare hardening & case study schema fix)
 
 ### TL;DR
 - 打通多标签 prepare_new 增强链路：补 PIPELINE_PLAN、增强试听、特征形状打印、缓存/平衡路径与导出 CSV，修复 BACKGROUND/CACHE 导入缺失。
@@ -545,3 +545,32 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 补 smoke/full 缓存后的自动 QA 抽样与背景试听；折内平衡比例验证（3:3:4）是否适配枪声数据量。
 - case study 支持多标签事件评估（按类阈值），并将背景池/外部正例参数化到 config。
 - 自动化测试：覆盖 generate_aligned_windows、多标签 balance_folds、MelDataset、case study 滑窗形状等。 
+
+## 2025-12-11 17:06:08 UTC Session (Case study multi-label mixing & robustness)
+
+### TL;DR
+- case study 支持多正类（glass+gunshot）混入背景并逐类评估/可视化，指标汇总包含 gt/pred 数、tp/fp/fn、acc/P/R/F1、未匹配、SNR/延迟分桶。
+- 稳定性加固：匹配函数过滤非法预测条目，Notebook 多单元换行/导入修复后可顺序运行。
+
+### 项目状态（宏观→微观）
+- **Case study**：meta 统一（esc50/gunshot_kaggle/freesound），按 TARGET_LABELS 收集正样本并叠加至背景床（可重叠）；推理/合并/评估按标签循环；可视化多行展示各类概率+GT/Pred+背景。
+- **评估输出**：按标签打印 tp/fp/fn/acc/precision/recall/f1、未匹配、SNR/延迟分桶，便于分别分析 glass 与 gunshot。
+- **健壮性**：`match_events_with_pairs` 清洗无 start/end 的预测；指标汇总单元格式化输出；Notebook 单元改为多行避免语法错误。
+
+### 本次完成
+1. case study 混音改为多正类：从 CASE_STUDY_META_FILES 收集所有 TARGET_LABELS 正样本（每类采样上限 5），统一用 `mix_glass_on_bed` 叠加到背景床。
+2. 推理/指标：使用 `predict_label_probs` 逐类概率和平滑，按类合并事件并匹配 GT；per-label metrics、SNR/延迟分桶与未匹配记录。
+3. 可视化/汇总：时间轴按标签动态增加行，指标汇总单元新增 gt/pred 计数与 acc，逐类打印。
+4. Bugfix：匹配函数过滤非法预测，Notebook 单元换行/导入修复，防止 TypeError/SyntaxError。
+
+### Insight
+- 按 TARGET_LABELS 自动扩展，多类混音/评估无需改代码，只需配置标签。
+- 先过滤预测结构再匹配，可避免单个异常条目拖垮整次评估。
+
+### 使用示例 / 验证
+- Notebook：重启内核顺序运行全流程，指标单元输出 `=== glass ===` / `=== gunshot ===` 各自统计，可视化按类分行。
+- CLI：`python -m src.case_study_cli --seed 123`，自动混入所有目标类，结果包含多类 metrics/SNR/延迟分桶。
+
+### TODO / Improvements（继承）
+- 支持按类独立阈值/merge_gap/smooth 配置；CLI 输出 per-class 报表。
+- 自动 QA/测试覆盖匹配函数、可视化数据准备；继续调优枪声 SNR/stretch 及增强 copies。 

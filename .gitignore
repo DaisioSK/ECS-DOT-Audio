@@ -1,5 +1,6 @@
 data/**/*.wav
 data/**/*.flac
+data/**/*.mp3
 /cache
 /cache_old
 **/.ipynb_checkpoints/

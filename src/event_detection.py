@@ -396,6 +396,31 @@ def predict_glass_probs(batch: torch.Tensor,
     return glass_probs, result
 
 
+def predict_label_probs(batch: torch.Tensor,
+                        spans: Sequence[Tuple[float, float]],
+                        labels: Sequence[str],
+                        model: torch.nn.Module | None = None,
+                        session=None,
+                        device: torch.device | str = "cpu") -> Tuple[dict[str, List[float]], InferenceResult]:
+    """Run inference and return per-label probabilities."""
+    if model is None and session is None:
+        raise ValueError("Provide either a Torch model or an ONNX session.")
+    if model is not None:
+        result = run_torch_inference(model, batch, device=device)
+    else:
+        result = run_onnx_inference(session, batch)
+    probs = {}
+    for lab in labels:
+        class_id = LABEL_TO_ID.get(lab)
+        if class_id is None or class_id >= result.probs.shape[1]:
+            raise ValueError(f"Class '{lab}' index out of bounds for probs shape {result.probs.shape}")
+        lab_probs = result.probs[:, class_id].tolist()
+        if len(lab_probs) != len(spans):
+            raise ValueError("Mismatch between spans and probability outputs.")
+        probs[lab] = lab_probs
+    return probs, result
+
+
 __all__ = [
     "ClipSpec",
     "GroundTruthEvent",
@@ -411,16 +436,31 @@ __all__ = [
     "bucket_delay",
     "smooth_probabilities",
     "predict_glass_probs",
+    "predict_label_probs",
     "GLASS_LABEL",
 ]
 
 
 def match_events_with_pairs(pred_events, gt_events, tolerance=0.5):
     """Return matched pairs (gt, pred, delay_sec) plus unmatched indices for gt/pred."""
+    # Accept dict -> flatten values (per-label predictions)
+    if isinstance(pred_events, dict):
+        merged = []
+        for v in pred_events.values():
+            if isinstance(v, list):
+                merged.extend(v)
+        pred_events = merged
+
+    # Filter to valid prediction dicts with start/end
+    cleaned_pred_events: List[dict] = []
+    for pred in pred_events:
+        if isinstance(pred, dict) and "start" in pred and "end" in pred:
+            cleaned_pred_events.append(pred)
+
     matched_gt = set()
     matched_pred = set()
     pairs = []
-    for p_idx, pred in enumerate(pred_events):
+    for p_idx, pred in enumerate(cleaned_pred_events):
         for g_idx, gt in enumerate(gt_events):
             if g_idx in matched_gt:
                 continue
@@ -434,7 +474,7 @@ def match_events_with_pairs(pred_events, gt_events, tolerance=0.5):
                 pairs.append((gt, pred, delay))
                 break
     unmatched_gt = [i for i in range(len(gt_events)) if i not in matched_gt]
-    unmatched_pred = [i for i in range(len(pred_events)) if i not in matched_pred]
+    unmatched_pred = [i for i in range(len(cleaned_pred_events)) if i not in matched_pred]
     return pairs, unmatched_gt, unmatched_pred
 
 
