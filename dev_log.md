@@ -504,3 +504,44 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 补齐增强计划、smoke/full 缓存、折内平衡（3:3:4）、QA 抽样/背景试听、索引导出。
 - 观察静音裁剪+阈值对窗口数量/正样本纯度的影响，必要时调整参数或 per-clip 窗口上限。
 - 评估重采样音质对模型的影响，如需更高保真试听，可保留原始播放但训练/推理保持 22.05k mono。 
+
+## 2025-12-11 07:35:32 UTC Session (Multi-label prepare hardening & case study schema fix)
+
+### TL;DR
+- 打通多标签 prepare_new 增强链路：补 PIPELINE_PLAN、增强试听、特征形状打印、缓存/平衡路径与导出 CSV，修复 BACKGROUND/CACHE 导入缺失。
+- case_study CLI/Notebook 对齐新 meta schema（canonical_label/filepath），修复多处换行/未定义错误，背景床/可视化可运行；记录滑窗 batch 形状，便于 Edge 对接。
+- 训练 notebook 兼容新 index 路径与缺失 path 列，kfold 分布展示行列翻转。
+
+### 项目状态（宏观→微观）
+- **宏观**：进入双标签（glass+gunshot）数据准备与 case study 验证阶段，训练/推理链路可跑，多标签基建已兼容，Edge 侧关注输入形状。
+- **数据/prepare**：多源 meta (esc50/gunshot_kaggle/freesound) 统一；重采样 22.05k mono；新增增强计划与 smoke/full 缓存流程，平衡索引导出 CSV。
+- **Case study**：CLI/Notebook 读取统一 meta 列表，背景池按 canonical_label 过滤，外部 glass/gunshot 可选；背景床/可视化/试听单元稳定。
+- **训练**：train.ipynb 默认读取 `cache/mel64_multi/index_balanced.csv`，缺失 path 列自动补；fold 分布展示 label 为行、fold 为列。
+
+### 本次完成
+1. prepare_new：补充 PIPELINE_PLAN（6 组合）并保守参数；新增 base vs aug 试听；在缓存准备后打印 log-mel 形状；导出平衡索引改为 CSV；修复 BACKGROUND_LABEL/CACHE_DIR 导入缺失导致的 NameError。
+2. case_study CLI：使用 CASE_STUDY_META_FILES，按 canonical_label 过滤背景，背景权重用新字段，路径解析 filepath（相对 PROJECT_ROOT）；摆脱旧 category/META_FILE 依赖。
+3. case_study Notebook：重建参数单元（含 TARGET_BED_DURATION）、背景池收集、背景床、滑窗可视化等换行错误；可视化单元按多行排版；背景/GT 打印用 canonical_label；滑窗输出 `Windows: N, batch shape: (N, n_mels, frames)`。
+4. train Notebook：配置 cell 兼容新索引路径优先级；load index cell 补 path 列兜底；fold 分布展示翻转轴。
+
+### 关键改动与原因
+- **统一 schema**：CASE_STUDY_META_FILES 集中 meta 列表，CLI/Notebook 共享，避免旧 `category` 字段缺失导致崩溃。
+- **增强链路可观测**：在 prepare_new 加 base/aug 试听与特征形状打印，确保增强质量与 Edge 输入一致；PIPELINE_PLAN 写入缓存，保持与旧版 6 组合一致但参数温和。
+- **路径/导出修复**：导出索引改 CSV（与训练默认匹配）；缺失 BACKGROUND/CACHE 导致的 NameError 全部显式导入。
+- **可视化稳定**：case_study 关键单元改为多行，消除 SyntaxError；背景床/时间轴依赖 bg_specs 而非未定义变量。
+
+### Insight / 巧思
+- 用 CASE_STUDY_META_FILES + canonical_label 统一背景池，任何新数据集只需追加 meta CSV 即可复用 case study 流程。
+- 在 prepare 阶段打印 `(64, T)` 和 `(batch,1,64,T)`，提前对齐 Edge 推理接口，减少后期嵌入式集成沟通成本。
+- 增强试听单元插入 smoke 缓存之后，能快速感知 mix/stretch 对枪声/玻璃的失真度，不必等全量缓存再返工。
+
+### 使用示例 / 验证
+- prepare_new：运行到缓存准备 → “Feature shape check” 打印形状；运行 smoke 缓存 + base/aug 试听；全量缓存后导出 `cache/mel64_multi/index_balanced.csv`。
+- train：配置 cell 会优先加载 `cache/mel64_multi/index_balanced.csv`，运行 Load Index 单元查看行=label、列=fold 分布，再跑 kfold 训练。
+- case_study：CLI/Notebook 直接运行，背景池自动取非目标标签，滑窗单元打印 batch 形状，图表/试听单元无语法报错。
+
+### TODO / Improvements（继承）
+- 继续调优多标签增强参数（枪声 SNR/stretch 更保守），观察 smoke QA 后再定 copies 数。
+- 补 smoke/full 缓存后的自动 QA 抽样与背景试听；折内平衡比例验证（3:3:4）是否适配枪声数据量。
+- case study 支持多标签事件评估（按类阈值），并将背景池/外部正例参数化到 config。
+- 自动化测试：覆盖 generate_aligned_windows、多标签 balance_folds、MelDataset、case study 滑窗形状等。 

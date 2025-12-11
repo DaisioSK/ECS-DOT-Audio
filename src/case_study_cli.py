@@ -12,14 +12,14 @@ import soundfile as sf
 import torch
 
 from src.config import (
-    AUDIO_DIR,
-    META_FILE,
-    POSITIVE_LABELS,
+    PROJECT_ROOT,
     SR,
+    TARGET_LABELS,
     WINDOW_HOP,
     WINDOW_SECONDS,
     CASE_STUDY_DEFAULTS,
     CASE_STUDY_DIR,
+    CASE_STUDY_META_FILES,
     CASE_STUDY_SCHEMA_VERSION,
     HARD_BG_CLASSES,
     HARD_BG_WEIGHT,
@@ -40,6 +40,7 @@ from src.event_detection import (
     smooth_probabilities,
 )
 from src.inference import create_onnx_session, load_torch_checkpoint
+from src.meta_utils import load_meta_files, map_canonical_labels
 
 
 def _load_config(path: Path | None) -> dict[str, Any]:
@@ -78,20 +79,25 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
 
     import pandas as pd
 
-    meta_df = pd.read_csv(META_FILE)
-    non_glass_df = meta_df[~meta_df["category"].isin(POSITIVE_LABELS.keys())]
+    meta_df = load_meta_files(CASE_STUDY_META_FILES)
+    meta_df = map_canonical_labels(meta_df, label_map={}, target_labels=TARGET_LABELS)
+    non_glass_df = meta_df[~meta_df["canonical_label"].isin(TARGET_LABELS)]
     bg_sample_n = max(18, len(glass_specs) * 4)
     
     # weighted sampling to include hard backgrounds
     if HARD_BG_CLASSES:
         non_glass_df = non_glass_df.copy()
-        non_glass_df['bg_w'] = non_glass_df['category'].apply(lambda c: HARD_BG_WEIGHT if c in HARD_BG_CLASSES else 1.0)
+        non_glass_df['bg_w'] = non_glass_df['canonical_label'].apply(lambda c: HARD_BG_WEIGHT if c in HARD_BG_CLASSES else 1.0)
         bg_samples = non_glass_df.sample(n=bg_sample_n, random_state=seed, replace=len(non_glass_df) < bg_sample_n, weights=non_glass_df['bg_w'])
     else:
         bg_samples = non_glass_df.sample(n=bg_sample_n, random_state=seed, replace=len(non_glass_df) < bg_sample_n)
 
     bg_specs = [
-        ClipSpec(path=AUDIO_DIR / row["filename"], label="background", gain_db=cfg["background_gain_db"])
+        ClipSpec(
+            path=(PROJECT_ROOT / row["filepath"]) if not Path(row["filepath"]).is_absolute() else Path(row["filepath"]),
+            label="background",
+            gain_db=cfg["background_gain_db"],
+        )
         for _, row in bg_samples.iterrows()
     ]
 

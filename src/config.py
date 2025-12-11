@@ -45,6 +45,11 @@ POSITIVE_LABELS = {
 
 # Case study / event detection defaults
 CASE_STUDY_DIR = CACHE_DIR / "case_study"
+CASE_STUDY_META_FILES = [
+    DATA_ROOT / "meta" / "esc50.csv",
+    DATA_ROOT / "meta" / "gunshot_kaggle.csv",
+    DATA_ROOT / "meta" / "freesound.csv",
+]
 CASE_STUDY_DEFAULTS = {   'background_gain_db': -8.0,
     'crossfade_ms': 15.0,
     'gap_range': (0.2, 8.0),
