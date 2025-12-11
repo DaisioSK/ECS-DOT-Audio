@@ -574,3 +574,44 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 ### TODO / Improvements（继承）
 - 支持按类独立阈值/merge_gap/smooth 配置；CLI 输出 per-class 报表。
 - 自动 QA/测试覆盖匹配函数、可视化数据准备；继续调优枪声 SNR/stretch 及增强 copies。 
+
+## 2025-12-11 17:52:09 +08 Session (Docs for agents & structure refresh)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3「事件检测验证」尾声。
+- **Tasks**：Doc-1 面向代理/新成员的项目概览与接口清单；Doc-2 调整工具脚本归档；保持多标签玻璃+枪声训练/推理上下文一致。
+
+### TL;DR
+- 重组文档：在 `document/` 下集中 `file-manifest.md` 与 `module_interfaces.md`，提供目录树用途和 `src/` 全部接口签名+描述。
+- 调整工具结构：`convert_to_wav.py` 移至 `tools/`，更新清单说明。
+- 为后续代理/新人快速切入做准备，未改动核心代码路径或功能。
+
+### 项目状态（宏观→微观）
+- **宏观**：数据准备、训练、推理、事件检测链路已稳定，多标签（glass/gunshot）基建就绪；当前迭代聚焦文档补齐和工程可发现性。
+- **代码结构**：核心逻辑仍在 `src/`（数据/增强/缓存/数据集/模型/训练/推理/事件检测）；工具脚本集中于 `tools/`；Notebook 覆盖 prepare/train/infer/case_study。
+- **文档**：`document/file-manifest.md` 提供目录级用途；`document/module_interfaces.md` 按文件→签名→描述列出所有类/函数，便于代理查找；`dev_log.md` 保留全历史。
+
+### 本次完成
+1) 移动 `convert_to_wav.py` 到 `tools/` 并在目录清单中同步路径与用途说明。  
+2) 新增/完善 `document/module_interfaces.md`：覆盖 `src/` 下全部类/函数签名，补充输入输出含义、示例与场景，结构为“文件→签名→描述”。  
+3) 将文档集中放入 `document/` 目录，保持 `file-manifest.md` 目录树与 `module_interfaces.md` 接口清单最新。
+
+### 关键改动与原因
+- **工具归档**：音频转换脚本迁移到 `tools/`，与重采样脚本并列，减少根目录噪音，符合“工具脚本集中”约定。  
+- **接口清单**：为代理/新人提供一次性可浏览的函数/类入口，降低反复 grep 的成本；包含示例调用，便于直接复用。  
+- **文档集中**：统一入口 `document/`，避免散落在根目录，便于自动化或阅读器一次加载。
+
+### Insight / 巧思
+- 采用“文件→签名→描述”三级结构，既保留 grep-friendly 的签名，又用口语化描述降低理解成本。  
+- 清单中列出内部 `_` 方法，可帮助代理在需要时安全调用或评审内部实现。  
+- 目录 manifest 留空 heavy 资源目录（cache/data 音频），保持清晰又避免噪音。
+
+### 使用示例 / 验证
+- 无核心代码变更；验证点在于路径/文档正确性：  
+  - `tools/convert_to_wav.py` 可直接执行 `python tools/convert_to_wav.py INPUT_DIR --out-dir OUT --sr 22050 --mono`。  
+  - 文档查看：`document/file-manifest.md`, `document/module_interfaces.md`。
+
+### TODO / Improvements（继承）
+- 待补《Quickstart/Agent README》：最短链路（准备→缓存→训练→推理/案例）及必改参数、产物路径。  
+- 在 dev_log 或文档中加入当前基线指标与 smoke 自检步骤，帮助验证跑通。  
+- 如前期 TODO：调优多标签增强/阈值、补最小自动化测试、按类阈值的 case study 配置、量化/ONNX 后续工作。
