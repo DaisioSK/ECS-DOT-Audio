@@ -6,6 +6,7 @@
   - 自下而上寻找包含 marker 的目录并返回项目根，找不到就抛错。常用于脚本启动时定位根目录，避免相对路径出错。
 - 常量：`PROJECT_ROOT`, `DATA_ROOT`, `CACHE_DIR`, `SR`, `N_MELS`, `N_FFT`, `HOP_LENGTH`, `WINDOW_SECONDS`, `WINDOW_HOP`, `TARGET_LABELS`, `LABEL_TO_ID`, `NUM_CLASSES`, `BACKGROUND_LABEL`, `CASE_STUDY_*` 等。
   - 统一的路径、标签空间、采样率和窗口参数，Notebook 与脚本都会读这些默认值。
+- 数据与缓存：`META_FILES`（多源 meta 列表）、`RAW_AUDIO_ROOTS`（源到原始音频根的映射，兼容缺失 filepath 场景）、`CACHE_ROOT`/`CACHE_MEL64`（缓存根及默认 mel64 路径），`AUDIO_DIR`/`META_FILE` 作为 legacy 兼容。
 
 ## audio_qc.py
 - `mel_db_to_waveform(mel_db: np.ndarray, sr: int = SR, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_iter: int = 32) -> np.ndarray`
@@ -44,6 +45,8 @@
 ## cache_utils.py
 - `CacheEntry(path: str, labels: List[str], label_ids: List[int], label: str, fold_id: int, source_filename: str, clip_id: str, window_id: str, pipeline_name: str, augment_desc: str, source_type: str)`
   - 缓存索引的统一行结构，包含路径、标签 ID、折号、来源等。
+- `_resolve_clip_info(row: pd.Series) -> (clip_id: str, source_name: str)`
+  - 优先从 `filepath` 推导 clip_id/文件名，缺失时回退 `filename`，避免新 meta 无 filename 时崩溃。
 - `_save_window(window: np.ndarray, label: str, clip_id: str, fold_id: int, suffix: str, cache_dir: Path) -> Path`
   - 计算 mel 并写 `.npy`，返回保存路径（内部使用）。
 - `sample_background_chunk(dataset_df: pd.DataFrame, length: int, rng=None) -> np.ndarray`
@@ -76,8 +79,8 @@
   - 围绕 RMS 峰值取窗，可再加偏移。
 - `_energy_mask(y: np.ndarray, sr: int, window_seconds: float, hop_seconds: float, threshold_ratio: float) -> np.ndarray`
   - 根据相对能量生成布尔掩码（内部）。
-- `generate_aligned_windows(row: pd.Series, align_labels: List[str], extra_shifts=None, energy_threshold=0.2, peak_ratio_threshold=0.7, front_peak_ratio=0.5, trim_silence_before=False, trim_top_db=20.0, trim_min_keep_seconds=0.0) -> List[np.ndarray]`
-  - 正类用峰值/能量筛窗，背景用能量掩码，可裁静音、可兜底偏移。例：`wins = generate_aligned_windows(row, ["glass","gunshot"])`。
+- `generate_aligned_windows(row: pd.Series, align_labels: List[str], extra_shifts=None, energy_threshold=0.2, peak_ratio_threshold=0.7, front_peak_ratio=0.5, trim_silence_before=False, trim_top_db=20.0, trim_min_keep_seconds=0.0, debug: bool = False, debug_sink: list | None = None) -> List[np.ndarray]`
+  - 正类用峰值/能量筛窗，背景用能量掩码，可裁静音、可兜底偏移；`debug=True` 时打印保留/丢弃原因，`debug_sink` 可收集每个窗口的状态/原因，并记录裁剪前后长度。例：`logs=[]; wins = generate_aligned_windows(row, ["glass","gunshot"], debug=True, debug_sink=logs)`.
 
 ## datasets.py
 - `balance_folds(index_df: pd.DataFrame, target_ratio: float = 0.4, random_state: int = 42) -> pd.DataFrame`

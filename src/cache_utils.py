@@ -32,6 +32,18 @@ GLASS_PIPELINE_PLAN: Dict[str, Dict[str, int]] = {
 GLASS_LABELS: List[str] = list(TARGET_LABELS)
 
 
+def _resolve_clip_info(row: pd.Series) -> tuple[str, str]:
+    """Derive clip_id and source filename from filepath/filename."""
+    filepath = row.get("filepath")
+    if isinstance(filepath, str) and filepath:
+        p = Path(filepath)
+    else:
+        p = Path(str(row.get("filename", "")))
+    clip_id = p.stem or str(row.get("clip_id", ""))
+    source_name = p.name if p.name else str(row.get("filename", ""))
+    return clip_id, source_name
+
+
 @dataclass
 class CacheEntry:
     """Metadata describing a cached mel tile."""
@@ -123,7 +135,7 @@ def _cache_glass_row(row: pd.Series,
         peak_ratio_threshold=peak_ratio_threshold,
         front_peak_ratio=front_peak_ratio,
     )
-    clip_id = Path(row["filename"]).stem
+    clip_id, source_name = _resolve_clip_info(row)
     fold_id = int(row.get("fold_id", -1))
     labels, label_ids, primary_label = _encode_labels(row["target_label"])
     entries: List[CacheEntry] = []
@@ -139,7 +151,7 @@ def _cache_glass_row(row: pd.Series,
                 label_ids=label_ids,
                 label=primary_label,
                 fold_id=fold_id,
-                source_filename=row["filename"],
+                source_filename=source_name,
                 clip_id=clip_id,
                 window_id=f"w{win_idx:02d}",
                 pipeline_name="base",
@@ -174,7 +186,7 @@ def _cache_glass_row(row: pd.Series,
                         label_ids=label_ids,
                         label=primary_label,
                         fold_id=fold_id,
-                        source_filename=row["filename"],
+                        source_filename=source_name,
                         clip_id=clip_id,
                         window_id=f"w{win_idx:02d}",
                         pipeline_name=pipeline_name,
@@ -191,7 +203,7 @@ def _cache_background_row(row: pd.Series,
                           energy_threshold: float) -> List[CacheEntry]:
     """Cache sliding-window mel tiles for a background clip."""
     windows = generate_aligned_windows(row, align_labels=list(align_labels), energy_threshold=energy_threshold)
-    clip_id = Path(row["filename"]).stem
+    clip_id, source_name = _resolve_clip_info(row)
     fold_id = int(row.get("fold_id", -1))
     labels, label_ids, primary_label = _encode_labels(row.get("target_label"))
     entries: List[CacheEntry] = []
@@ -205,7 +217,7 @@ def _cache_background_row(row: pd.Series,
                 label_ids=label_ids,
                 label=primary_label,
                 fold_id=fold_id,
-                source_filename=row["filename"],
+                source_filename=source_name,
                 clip_id=clip_id,
                 window_id=f"w{win_idx:02d}",
                 pipeline_name="base",

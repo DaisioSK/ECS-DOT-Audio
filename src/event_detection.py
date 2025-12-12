@@ -14,7 +14,7 @@ from .data_utils import log_mel_spectrogram
 from .inference import InferenceResult, run_onnx_inference, run_torch_inference
 
 
-GLASS_LABEL = TARGET_LABELS[0]
+GLASS_LABEL = "glass" if "glass" in TARGET_LABELS else TARGET_LABELS[0]
 GLASS_CLASS_ID = LABEL_TO_ID.get(GLASS_LABEL, 0)
 
 

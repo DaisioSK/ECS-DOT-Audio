@@ -15,6 +15,7 @@ from src.config import (
     PROJECT_ROOT,
     SR,
     TARGET_LABELS,
+    POSITIVE_LABELS,
     WINDOW_HOP,
     WINDOW_SECONDS,
     CASE_STUDY_DEFAULTS,
@@ -73,7 +74,7 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
     import pandas as pd
 
     meta_df = load_meta_files(CASE_STUDY_META_FILES)
-    meta_df = map_canonical_labels(meta_df, label_map={}, target_labels=TARGET_LABELS)
+    meta_df = map_canonical_labels(meta_df, label_map=POSITIVE_LABELS, target_labels=TARGET_LABELS)
     pos_df = meta_df[meta_df["canonical_label"].isin(TARGET_LABELS)]
     if pos_df.empty and not background_only:
         raise RuntimeError("No positive clips found in meta files for case study.")
@@ -85,8 +86,8 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
         pos_specs.append(ClipSpec(path=p, label=row["canonical_label"], gain_db=cfg["glass_gain_db"]))
 
     non_glass_df = meta_df[~meta_df["canonical_label"].isin(TARGET_LABELS)]
-    bg_sample_n = max(18, len(glass_specs) * 4)
-    
+    bg_sample_n = max(18, len(pos_specs) * 4) if not background_only else 18
+
     # weighted sampling to include hard backgrounds
     if HARD_BG_CLASSES:
         non_glass_df = non_glass_df.copy()
@@ -144,9 +145,11 @@ def run_case_study(cfg_path: Path | None, output_dir: Path | None, seed: int | N
 
     # Inference (torch, onnx optional)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt_path = Path("cache/experiments/tinyglassnet_best.pt")
-    onnx_path = Path("cache/experiments/tinyglassnet_best.onnx")
+    ckpt_path = Path(cfg.get("checkpoint_path", "cache/experiments/tinyglassnet_best.pt"))
+    onnx_path = Path(cfg.get("onnx_path", "cache/experiments/tinyglassnet_best.onnx"))
 
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path} (set checkpoint_path in cfg)")
     model, _ = load_torch_checkpoint(ckpt_path, device=device)
     probs_dict, _ = predict_label_probs(batch, spans, labels=TARGET_LABELS, model=model, device=device)
 

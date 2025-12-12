@@ -15,10 +15,29 @@ def locate_project_root(start: Path | None = None, marker: str = "data") -> Path
 
 PROJECT_ROOT = locate_project_root()
 DATA_ROOT = PROJECT_ROOT / "data"
+
+# Data/meta configuration (multi-source friendly)
+META_FILES = [
+    DATA_ROOT / "meta" / "esc50.csv",
+    DATA_ROOT / "meta" / "gunshot_kaggle.csv",
+    DATA_ROOT / "meta" / "freesound.csv",
+]
+# Optional raw audio roots by source key; used when filepath is missing.
+RAW_AUDIO_ROOTS = {
+    "esc50": DATA_ROOT / "esc50",
+    "gunshot_kaggle": DATA_ROOT / "gunshot_kaggle",
+    "freesound": DATA_ROOT / "freesound",
+}
+# Legacy single-file paths kept for backward compatibility (prefer META_FILES/RAW_AUDIO_ROOTS).
 AUDIO_DIR = DATA_ROOT / "audio"
 META_FILE = DATA_ROOT / "meta" / "esc50.csv"
-CACHE_DIR = PROJECT_ROOT / "cache" / "mel64"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Cache roots
+CACHE_ROOT = PROJECT_ROOT / "cache"
+CACHE_MEL64 = CACHE_ROOT / "mel64"
+CACHE_MEL64.mkdir(parents=True, exist_ok=True)
+# Backward-compatible alias
+CACHE_DIR = CACHE_MEL64
 
 # Audio + feature parameters
 SR = 22050
@@ -45,11 +64,7 @@ POSITIVE_LABELS = {
 
 # Case study / event detection defaults
 CASE_STUDY_DIR = CACHE_DIR / "case_study"
-CASE_STUDY_META_FILES = [
-    DATA_ROOT / "meta" / "esc50.csv",
-    DATA_ROOT / "meta" / "gunshot_kaggle.csv",
-    DATA_ROOT / "meta" / "freesound.csv",
-]
+CASE_STUDY_META_FILES = META_FILES
 CASE_STUDY_DEFAULTS = {   'background_gain_db': -8.0,
     'crossfade_ms': 15.0,
     'gap_range': (0.2, 8.0),

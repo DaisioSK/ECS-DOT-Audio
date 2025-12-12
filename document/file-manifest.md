@@ -4,10 +4,13 @@
 .
 ├── Dockerfile                     # 基于 python:3.10-slim 的 CPU 镜像，预装 PyTorch/onnxruntime/librosa/pyarrow 等训练推理依赖
 ├── env.mk                         # make 配方：镜像 build/rebuild、启动容器/Notebook、运行测试的统一入口
-├── dev_log.md                     # 全项目开发历程与里程碑总结，含每次 session 的目标、改动、TODO
+├── document/
+│   ├── dev_log.md                 # 全项目开发历程与里程碑总结，含每次 session 的目标、改动、TODO
+│   ├── file-manifest.md           # 项目目录与用途清单（当前文件）
+│   └── module_interfaces.md       # src/ 模块/函数/类签名及用途清单
 ├── case_study.ipynb               # 多标签事件级混音与滑窗推理 Notebook，含可视化/试听/指标汇总
-├── prepare.ipynb                  # 早期单标签数据准备流水线（加载/能量分析/缓存/QA），保留兼容
-├── prepare_new.ipynb              # 主力多源多标签准备：去重/重采样/分折/能量与分窗 QA/增强/缓存/平衡索引导出
+├── prepare.ipynb                  # 主力多源多标签数据准备：重采样、分折、能量/窗口分析、窗口 QA/试听、增强与缓存、平衡索引导出
+├── prepare_bak.ipynb              # 早期单标签准备流程的备份（保留参考，不再主推）
 ├── train.ipynb                    # K 折训练与可视化，输出最佳 checkpoint 和 ONNX，含指标表/曲线/混淆矩阵
 ├── infer.ipynb                    # 读取 mel 样本，Torch vs ONNX 前向对比、概率柱状图与 delta 校验
 ├── cache/                         # 运行后生成的特征与中间产物：mel64 .npy、QA wav、索引 CSV/Parquet 等（不列举具体文件）

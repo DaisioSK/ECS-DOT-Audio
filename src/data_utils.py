@@ -166,40 +166,167 @@ def generate_aligned_windows(row: pd.Series,
                              front_peak_ratio: float = 0.5,
                              trim_silence_before: bool = False,
                              trim_top_db: float = 20.0,
-                             trim_min_keep_seconds: float = 0.0) -> List[np.ndarray]:
+                             trim_min_keep_seconds: float = 0.0,
+                             debug: bool = False,
+                             debug_sink: list | None = None) -> List[np.ndarray]:
     """Produce waveform windows for a row with energy filtering."""
-    y, sr = load_audio(row)
+    y_raw, sr = load_audio(row)
+    orig_len = len(y_raw)
+    # Compute lead/tail trim via silence split, but keep raw waveform for window grid.
+    lead_trim = 0
+    tail_trim = 0
     if trim_silence_before:
-        y = trim_silence(y, sr, top_db=trim_top_db, min_keep_seconds=trim_min_keep_seconds)
+        intervals = librosa.effects.split(y_raw, top_db=trim_top_db)
+        min_keep = int(trim_min_keep_seconds * sr)
+        kept = [(s, e) for (s, e) in intervals if (e - s) >= min_keep]
+        if kept:
+            lead_trim = kept[0][0]
+            tail_trim = max(0, orig_len - kept[-1][1])
+    # Use trimmed slice for energy eval; keep raw for window timing
+    y_trim = y_raw[lead_trim:orig_len - tail_trim] if (lead_trim or tail_trim) else y_raw
+    window_len = int(WINDOW_SECONDS * sr)
+    hop_len = int(WINDOW_HOP * sr)
+    n_windows_raw = max(1, int(np.floor(max(orig_len - window_len, 0) / max(hop_len, 1))) + 1)
+    n_windows_trim = max(1, int(np.floor(max(len(y_trim) - window_len, 0) / max(hop_len, 1))) + 1)
+    if debug_sink is not None:
+        debug_sink.append({
+            "start_sec": None,
+            "end_sec": None,
+            "peak_ratio": None,
+            "peak_position": None,
+            "status": "info",
+            "reason": f"windows_raw={n_windows_raw} windows_trim={n_windows_trim} len_raw={orig_len/sr:.2f}s len_trim={len(y_trim)/sr:.2f}s lead_trim={lead_trim/sr:.2f}s tail_trim={tail_trim/sr:.2f}s",
+        })
     label = row['target_label']
     windows: List[np.ndarray] = []
     if label in align_labels:
-        energy_global = np.max(y ** 2) + 1e-8
-        for window, _ in _iter_windows(y, sr):
+        energy_global = np.max(y_trim ** 2) + 1e-8
+        for window_raw, start in _iter_windows(y_raw, sr):
+            start_sec = start / sr
+            end = start + window_len
+            end_sec = end / sr
+            # Skip windows fully in trimmed-out regions
+            if (start < lead_trim and end <= lead_trim) or (start >= orig_len - tail_trim):
+                if debug_sink is not None:
+                    debug_sink.append({
+                        "start_sec": start_sec,
+                        "end_sec": end_sec,
+                        "peak_ratio": None,
+                        "peak_position": None,
+                        "status": "skip",
+                        "reason": "silent_trim",
+                    })
+                if debug:
+                    print(f"[SKIP silent trim] t={start_sec:.2f}s")
+                continue
+            # Map to trimmed waveform slice for evaluation
+            start_trim = max(0, start - lead_trim)
+            end_trim = start_trim + window_len
+            if end_trim > len(y_trim):
+                # partial coverage after trim; skip
+                if debug_sink is not None:
+                    debug_sink.append({
+                        "start_sec": start_sec,
+                        "end_sec": end_sec,
+                        "peak_ratio": None,
+                        "peak_position": None,
+                        "status": "skip",
+                        "reason": "partial_trim_overlap",
+                    })
+                if debug:
+                    print(f"[SKIP partial overlap] t={start_sec:.2f}s")
+                continue
+            window = y_trim[start_trim:end_trim]
             energy = window ** 2
             peak_idx = int(np.argmax(energy))
             peak_ratio = energy[peak_idx] / energy_global
             peak_position = peak_idx / max(len(window), 1)
+            if debug_sink is not None:
+                debug_sink.append({
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "peak_ratio": float(peak_ratio),
+                    "peak_position": float(peak_position),
+                    "status": "pending",
+                    "reason": "",
+                })
             if peak_ratio < peak_ratio_threshold:
+                if debug:
+                    print(f"[SKIP low peak] t={start_sec:.2f}s peak_ratio={peak_ratio:.3f} pos={peak_position:.3f}")
+                if debug_sink is not None:
+                    debug_sink[-1]["status"] = "skip"
+                    debug_sink[-1]["reason"] = "low_peak_ratio"
                 continue
             if peak_position > front_peak_ratio:
+                if debug_sink is not None:
+                    debug_sink[-1]["status"] = "skip"
+                    debug_sink[-1]["reason"] = "late_peak"
                 continue
             windows.append(window)
+            if debug_sink is not None:
+                debug_sink[-1]["status"] = "keep"
+                debug_sink[-1]["reason"] = "pass"
         if not windows:
             shifts = [0.0]
             if extra_shifts:
                 shifts.extend(extra_shifts)
             for shift in shifts:
-                windows.append(center_peak_window(y, sr, shift_seconds=shift))
+                windows.append(center_peak_window(y_trim, sr, shift_seconds=shift))
+                if debug_sink is not None:
+                    debug_sink.append({
+                        "start_sec": None,
+                        "peak_ratio": None,
+                        "peak_position": None,
+                        "status": "keep",
+                        "reason": f"fallback_shift_{shift}",
+                    })
                 break
     else:
-        mask = _energy_mask(y, sr, WINDOW_SECONDS, WINDOW_HOP, energy_threshold)
-        for idx, (window, _) in enumerate(_iter_windows(y, sr)):
+        mask = _energy_mask(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP, energy_threshold)
+        for idx, (window_raw, start) in enumerate(_iter_windows(y_raw, sr)):
+            if debug_sink is not None:
+                debug_sink.append({
+                    "start_sec": start / sr,
+                    "end_sec": (start + window_len) / sr,
+                    "peak_ratio": None,
+                    "peak_position": None,
+                    "status": "pending",
+                    "reason": "",
+                })
             if idx < len(mask) and not mask[idx]:
+                if debug_sink is not None:
+                    debug_sink[-1]["status"] = "skip"
+                    debug_sink[-1]["reason"] = "mask_false"
                 continue
+            # Skip windows fully in trimmed regions
+            if (start < lead_trim and (start + window_len) <= lead_trim) or (start >= orig_len - tail_trim):
+                if debug_sink is not None:
+                    debug_sink[-1]["status"] = "skip"
+                    debug_sink[-1]["reason"] = "silent_trim"
+                continue
+            # Map to trimmed portion for energy eval
+            start_trim = max(0, start - lead_trim)
+            end_trim = start_trim + window_len
+            if end_trim > len(y_trim):
+                if debug_sink is not None:
+                    debug_sink[-1]["status"] = "skip"
+                    debug_sink[-1]["reason"] = "partial_trim_overlap"
+                continue
+            window = y_trim[start_trim:end_trim]
             windows.append(window)
+            if debug_sink is not None:
+                debug_sink[-1]["status"] = "keep"
+                debug_sink[-1]["reason"] = "pass"
         if not windows:
-            windows.append(center_peak_window(y, sr))
+            windows.append(center_peak_window(y_trim, sr))
+            if debug_sink is not None:
+                debug_sink.append({
+                    "start_sec": None,
+                    "peak_ratio": None,
+                    "peak_position": None,
+                    "status": "keep",
+                    "reason": "fallback_bg_center",
+                })
     return windows
 
 
