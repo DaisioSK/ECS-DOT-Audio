@@ -22,6 +22,7 @@ from .config import (
     SR,
     WINDOW_HOP,
     WINDOW_SECONDS,
+    WINDOW_PARAMS,
 )
 
 
@@ -158,18 +159,18 @@ def _energy_mask(y: np.ndarray,
     return energy > threshold_ratio
 
 
-def generate_aligned_windows(row: pd.Series,
-                             align_labels: List[str],
-                             extra_shifts: List[float] | None = None,
-                             energy_threshold: float = 0.2,
-                             peak_ratio_threshold: float = 0.7,
-                             front_peak_ratio: float = 0.5,
-                             trim_silence_before: bool = False,
-                             trim_top_db: float = 20.0,
-                             trim_min_keep_seconds: float = 0.0,
-                             debug: bool = False,
-                             debug_sink: list | None = None) -> List[np.ndarray]:
-    """Produce waveform windows for a row with energy filtering."""
+def generate_aligned_windows_legacy(row: pd.Series,
+                                    align_labels: List[str],
+                                    extra_shifts: List[float] | None = None,
+                                    energy_threshold: float = 0.2,
+                                    peak_ratio_threshold: float = 0.7,
+                                    front_peak_ratio: float = 0.5,
+                                    trim_silence_before: bool = False,
+                                    trim_top_db: float = 20.0,
+                                    trim_min_keep_seconds: float = 0.0,
+                                    debug: bool = False,
+                                    debug_sink: list | None = None) -> List[np.ndarray]:
+    """Legacy window generator with inline trim/energy logic."""
     y_raw, sr = load_audio(row)
     orig_len = len(y_raw)
     # Compute lead/tail trim via silence split, but keep raw waveform for window grid.
@@ -330,6 +331,135 @@ def generate_aligned_windows(row: pd.Series,
     return windows
 
 
+def generate_aligned_windows(row: pd.Series,
+                             align_labels: List[str],
+                             extra_shifts: List[float] | None = None,
+                             energy_threshold: float = 0.2,
+                             peak_ratio_threshold: float = 0.7,
+                             front_peak_ratio: float = 0.5,
+                             trim_silence_before: bool = False,
+                             trim_top_db: float = 20.0,
+                             trim_min_keep_seconds: float = 0.0,
+                             debug: bool = False,
+                             label_params: Dict[str, Dict[str, float]] | None = None,
+                             debug_sink: list | None = None) -> List[np.ndarray]:
+    """Generate windows aligned to label semantics with full debug logging.
+
+    Logs every candidate (and trimmed regions) to debug_sink with keys:
+    start_sec/end_sec (relative to raw audio), status, reason, peak_ratio, peak_position.
+    """
+    label = row['target_label']
+
+    # Per-label overrides: first from call site, else from config WINDOW_PARAMS.
+    label_cfg = label_params or WINDOW_PARAMS
+
+    def get_param(name: str, default: float):
+        if label in label_cfg and name in label_cfg[label]:
+            return label_cfg[label][name]
+        return default
+
+    energy_thr = get_param("energy_threshold", energy_threshold)
+    peak_ratio_thr = get_param("peak_ratio_threshold", peak_ratio_threshold)
+    front_peak_thr = get_param("front_peak_ratio", front_peak_ratio)
+    shifts = [0.0]
+    if extra_shifts:
+        shifts.extend(extra_shifts)
+    if label in label_cfg and "extra_shifts" in label_cfg[label]:
+        # Override completely if provided per label
+        shifts = label_cfg[label]["extra_shifts"]
+        if isinstance(shifts, tuple):
+            shifts = list(shifts)
+
+    y_raw, sr = load_audio(row)
+    orig_len = len(y_raw)
+
+    # Head/tail trim only; keep mapping to original timeline.
+    lead_trim = 0
+    tail_trim = 0
+    if trim_silence_before:
+        intervals = librosa.effects.split(y_raw, top_db=trim_top_db)
+        min_keep = int(trim_min_keep_seconds * sr)
+        kept = [(s, e) for (s, e) in intervals if (e - s) >= min_keep]
+        if kept:
+            lead_trim = kept[0][0]
+            tail_trim = max(0, orig_len - kept[-1][1])
+    y_trim = y_raw[lead_trim:orig_len - tail_trim] if (lead_trim or tail_trim) else y_raw
+
+    window_len = int(WINDOW_SECONDS * sr)
+    hop_len = int(WINDOW_HOP * sr)
+
+    def log_entry(start_sec, end_sec, status, reason, peak_ratio=None, peak_position=None):
+        if debug_sink is None:
+            return
+        debug_sink.append({
+            "start_sec": start_sec,
+            "end_sec": end_sec,
+            "peak_ratio": None if peak_ratio is None else float(peak_ratio),
+            "peak_position": None if peak_position is None else float(peak_position),
+            "status": status,
+            "reason": reason,
+        })
+
+    # Log overall info and trimmed regions.
+    log_entry(None, None, "info",
+              f"len_raw={orig_len/sr:.3f}s len_trim={len(y_trim)/sr:.3f}s lead_trim={lead_trim/sr:.3f}s tail_trim={tail_trim/sr:.3f}s window={WINDOW_SECONDS}s hop={WINDOW_HOP}s")
+    if lead_trim > 0:
+        log_entry(0.0, lead_trim / sr, "remove", "silent_trim_head")
+    if tail_trim > 0:
+        log_entry((orig_len - tail_trim) / sr, orig_len / sr, "remove", "silent_trim_tail")
+
+    windows: List[np.ndarray] = []
+
+    if label in align_labels:
+        energy_global = float(np.max(y_trim ** 2) + 1e-8)
+        for idx, (win, start_trim) in enumerate(_iter_windows(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP)):
+            start_sec = (lead_trim + start_trim) / sr
+            end_sec = start_sec + WINDOW_SECONDS
+            energy = win ** 2
+            peak_idx = int(np.argmax(energy))
+            peak_ratio = energy[peak_idx] / energy_global
+            peak_position = peak_idx / max(len(win), 1)
+
+            status = "keep"
+            reason = "pass"
+            if peak_ratio < peak_ratio_thr:
+                status = "skip"
+                reason = "low_peak_ratio"
+            elif peak_position > front_peak_thr:
+                status = "skip"
+                reason = "late_peak"
+
+            log_entry(start_sec, end_sec, status, reason, peak_ratio, peak_position)
+            if status == "keep":
+                windows.append(win)
+
+        if not windows:
+            for shift in shifts:
+                win = center_peak_window(y_trim, sr, shift_seconds=shift)
+                log_entry(None, None, "keep", f"fallback_center_shift_{shift}")
+                windows.append(win)
+                break
+    else:
+        mask = _energy_mask(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP, energy_thr)
+        for idx, (win, start_trim) in enumerate(_iter_windows(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP)):
+            start_sec = (lead_trim + start_trim) / sr
+            end_sec = start_sec + WINDOW_SECONDS
+            status = "keep"
+            reason = "pass"
+            if idx < len(mask) and not mask[idx]:
+                status = "skip"
+                reason = "mask_below_threshold"
+            log_entry(start_sec, end_sec, status, reason, None, None)
+            if status == "keep":
+                windows.append(win)
+        if not windows:
+            win = center_peak_window(y_trim, sr)
+            log_entry(None, None, "keep", "fallback_bg_center")
+            windows.append(win)
+
+    return windows
+
+
 __all__ = [
     "build_dataset",
     "audio_path",
@@ -337,5 +467,6 @@ __all__ = [
     "log_mel_spectrogram",
     "sliding_windows",
     "center_peak_window",
+    "generate_aligned_windows_legacy",
     "generate_aligned_windows",
 ]

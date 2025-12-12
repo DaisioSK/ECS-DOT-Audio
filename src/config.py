@@ -48,6 +48,26 @@ WINDOW_SECONDS = 1.0
 WINDOW_HOP = 0.5
 SEED = 42
 
+# Per-label windowing defaults (can be overridden at call site)
+WINDOW_PARAMS = {
+    "glass": {
+        "peak_ratio_threshold": 0.8,
+        "front_peak_ratio": 0.5,
+        "energy_threshold": 0.2,
+        "extra_shifts": [0.0],
+    },
+    "gunshot": {
+        "peak_ratio_threshold": 0.6,
+        "front_peak_ratio": 0.7,
+        "energy_threshold": 0.2,
+        "extra_shifts": [0.0, 0.1, -0.1],
+    },
+    "background": {
+        "energy_threshold": 0.15,
+        "extra_shifts": [0.0],
+    },
+}
+
 # Label configuration
 # Canonical target labels (multi-label ready).
 TARGET_LABELS = ["glass", "gunshot"]

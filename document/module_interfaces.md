@@ -79,8 +79,10 @@
   - 围绕 RMS 峰值取窗，可再加偏移。
 - `_energy_mask(y: np.ndarray, sr: int, window_seconds: float, hop_seconds: float, threshold_ratio: float) -> np.ndarray`
   - 根据相对能量生成布尔掩码（内部）。
-- `generate_aligned_windows(row: pd.Series, align_labels: List[str], extra_shifts=None, energy_threshold=0.2, peak_ratio_threshold=0.7, front_peak_ratio=0.5, trim_silence_before=False, trim_top_db=20.0, trim_min_keep_seconds=0.0, debug: bool = False, debug_sink: list | None = None) -> List[np.ndarray]`
-  - 正类用峰值/能量筛窗，背景用能量掩码，可裁静音、可兜底偏移；`debug=True` 时打印保留/丢弃原因，`debug_sink` 可收集每个窗口的状态/原因，并记录裁剪前后长度。例：`logs=[]; wins = generate_aligned_windows(row, ["glass","gunshot"], debug=True, debug_sink=logs)`.
+- `generate_aligned_windows(row: pd.Series, align_labels: List[str], extra_shifts=None, energy_threshold=0.2, peak_ratio_threshold=0.7, front_peak_ratio=0.5, trim_silence_before=False, trim_top_db=20.0, trim_min_keep_seconds=0.0, debug=False, label_params=None, debug_sink: list | None = None) -> List[np.ndarray]`
+  - 正类：对裁静音后的波形滑窗，按峰值占比和峰值位置筛选；背景：按能量掩码筛窗；两者都在 `debug_sink` 记录“原始时间轴上的起止、状态、原因、峰值占比/位置”，并在无窗时用中心峰值兜底。默认参数从 `config.WINDOW_PARAMS` 读取（glass/gunshot/background 三套），`label_params` 可进一步覆写，`extra_shifts` 支持兜底偏移；`debug` 仅为兼容保留，不再打印。例：`logs=[]; wins = generate_aligned_windows(row, ["glass","gunshot"], label_params={"gunshot":{"peak_ratio_threshold":0.6}}, debug_sink=logs)`.
+- `generate_aligned_windows_legacy(...)`
+  - 旧版逻辑，保留向后兼容（可参考源码，推荐使用新版）。
 
 ## datasets.py
 - `balance_folds(index_df: pd.DataFrame, target_ratio: float = 0.4, random_state: int = 42) -> pd.DataFrame`
