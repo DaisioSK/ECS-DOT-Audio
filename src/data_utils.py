@@ -57,12 +57,23 @@ def build_dataset(meta_df: pd.DataFrame,
 def audio_path(row: pd.Series) -> Path:
     """Resolve on-disk path for the audio file described by a metadata row."""
     # Prefer explicit filepath if present
-    if 'filepath' in row and pd.notna(row['filepath']):
-        p = Path(row['filepath'])
+    fp = row.get('filepath')
+    if isinstance(fp, (str, Path)) and fp:
+        p = Path(fp)
         if not p.is_absolute():
             p = PROJECT_ROOT / p
         return p
-    return AUDIO_DIR / row['filename']
+    # Fallback: raw_filepath (already relative to project), then filename
+    raw_fp = row.get('raw_filepath')
+    if isinstance(raw_fp, (str, Path)) and raw_fp:
+        p = Path(raw_fp)
+        if not p.is_absolute():
+            p = PROJECT_ROOT / p
+        return p
+    fname = row.get('filename')
+    if isinstance(fname, str) and fname:
+        return AUDIO_DIR / fname
+    raise KeyError("Missing audio path: expected one of ['filepath', 'raw_filepath', 'filename']")
 
 
 def load_audio(row: pd.Series, sr: int = SR) -> Tuple[np.ndarray, int]:

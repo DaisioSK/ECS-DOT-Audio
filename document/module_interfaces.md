@@ -64,7 +64,7 @@
 - `build_dataset(meta_df: pd.DataFrame, positive_map=None, background_label=BACKGROUND_LABEL, background_multiplier=BACKGROUND_MULTIPLIER, seed=42) -> pd.DataFrame`
   - 从 meta 采样正例/背景，写入 `target_label`，背景量按倍率控制。
 - `audio_path(row: pd.Series) -> Path`
-  - 解析音频路径（优先 filepath，否则 AUDIO_DIR/filename）。
+  - 解析音频路径（优先 filepath，其次 raw_filepath，最后 AUDIO_DIR/filename；都缺失时抛 KeyError）。
 - `load_audio(row: pd.Series, sr: int = SR) -> (np.ndarray, int)`
   - 加载音频并重采样到目标采样率，单声道输出。
 - `trim_silence(y: np.ndarray, sr: int, top_db: float = 20.0, min_keep_seconds: float = 0.0) -> np.ndarray`

@@ -615,3 +615,35 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 待补《Quickstart/Agent README》：最短链路（准备→缓存→训练→推理/案例）及必改参数、产物路径。  
 - 在 dev_log 或文档中加入当前基线指标与 smoke 自检步骤，帮助验证跑通。  
 - 如前期 TODO：调优多标签增强/阈值、补最小自动化测试、按类阈值的 case study 配置、量化/ONNX 后续工作。
+
+## 2025-12-15 03:20:47 UTC Session (Prepare 多源多标签分窗+增强+缓存重构)
+
+### TL;DR
+- 重构 prepare 流程：多源 meta 统一、按标签分窗、正类/背景分开增强与均衡；生成 window 级表并导出 mel 缓存和训练索引。
+- QA 能力增强：随机样本试听、分窗可视化、3×3 log-mel 网格；pivot 汇总支持 fold×label×pipeline/原始类。
+
+### 项目状态（宏观→微观）
+- **数据准备**：esc50 + gunshot_kaggle + freesound 统一 schema，TARGET_LABELS=glass/gunshot，其余映射 background；fold 划分可见于 window_df。
+- **分窗逻辑**：`generate_aligned_windows` 支持 per-label 参数（`WINDOW_PARAMS`），正类峰值对齐，背景能量掩码；debug_sink 记录起止/状态/原因。
+- **增强与平衡**：正类按 plan 增广生成 `aug_df`，背景按原始类均分每 fold 配额并不足用随机 pipeline 补齐；合并为 `all_windows_df`。
+- **缓存导出**：提供 mel64 缓存 cell，写入 `cache/{label}/fold{n}/clip_window.npy`，索引 CSV 含 path/label/fold/pipeline/clip/window 等供训练读取。
+
+### 本次完成
+1. **分窗/增强重构**：使用 per-label 阈值和偏移，正类（glass/gun）按 plan 生成 base+增广窗口；背景均分每 fold 配额，缺口随机窗口+随机 pipeline 补齐，保留 audio。
+2. **窗口级数据结构**：构建 `window_df/all_windows_df`（clip_id、window_id、fold、source、orig/target_label、起止/长度、音频）；正负类汇总 pivot（fold×target×pipeline，总计）。
+3. **可视化/QA**：新增 3×3 log-mel 网格（glass/gun/background 均衡抽样）；分窗试听 cell 播放整段+窗口；pivot 报表含总计。
+4. **缓存与索引**：mel 写盘 + 训练索引 CSV（相对路径、标签、fold、pipeline、clip/window 等），便于 DataLoader 直接加载；`audio_path` 修复缺 filename 时的多重回退（filepath/raw_filepath）。
+
+### Insight / 巧思
+- 背景均衡：按原始类先均分，再用增广补缺，避免单类背景过多；fold 配额固定可控。
+- 记录 audio 列：增广后保留波形，便于后续再增广/试听/写盘，不需重切窗。
+- pivot + 总计：多级列（fold×label×pipeline/原始类）附带行列总和，一眼看平衡性。
+
+### 使用示例 / 验证
+- prepare：运行分窗/增广 cell 后查看 pivot（fold×label×pipeline），3×3 log-mel 网格可视化；运行缓存 cell 生成 mel 和索引 CSV。
+- QA：随机样本试听（整段+窗口），background pivot 检查每 fold/pipeline/原始类分布。
+
+### TODO / Improvements（继承）
+- 调整正类/背景的增广配额与扰动幅度（枪声更重，背景更丰富），观察 pivot 与试听效果。
+- 缓存/索引落盘后，训练侧对接并验证 fold 分布是否满足需求；可加简易 smoke loader 检查形状/标签。
+- 进一步清理 Notebook 中重复/过时单元，整理 Quickstart（prepare→cache→train）。 
