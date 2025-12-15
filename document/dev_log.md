@@ -647,3 +647,42 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 调整正类/背景的增广配额与扰动幅度（枪声更重，背景更丰富），观察 pivot 与试听效果。
 - 缓存/索引落盘后，训练侧对接并验证 fold 分布是否满足需求；可加简易 smoke loader 检查形状/标签。
 - 进一步清理 Notebook 中重复/过时单元，整理 Quickstart（prepare→cache→train）。 
+
+## 2025-12-15 15:46:57 +08 Session (Train/Infer 对齐与推理可视化)
+
+### TL;DR
+- 训练侧：确认以 1s 窗/0.5s hop、多标签 BCE+sigmoid、LABEL_TO_ID={glass:0, gunshot:1} 的窗口级索引训练，fold 分布均衡，指标波动收敛。
+- 推理侧：重写 infer.ipynb，沿用同样的切窗/特征配置，支持批量音频自动切窗→log-mel→模型推理→窗口级概率与标签，按音频分组可视化并附整段试听。
+- 可视化：每个音频一张图，横向排列该音频所有窗口（按 start_sec 排序），每窗两根柱（glass/gunshot），图高随窗口数自适应，无 legend 警告。
+- 配置入口：可调 AUDIO_PATTERNS/采样上限/帧裁剪/阈值，checkpoint 默认为 cache/experiments/tinyglassnet_best.pt。
+
+### 项目状态（宏观→微观）
+- **宏观**：训练/推理链路已按窗口级对齐；prepare→train→infer 使用统一的采样率、切窗与特征设定。
+- **训练**：窗口级索引（背景/正类），BCE+sigmoid，多标签映射；fold 配额均衡，训练/验证正常运行，无 all-zero F1 异常。
+- **推理**：infer.ipynb 读取任意音频（wav/mp3 等），自动切窗、计算 log-mel、前向推理、阈值判定；输出 pred_df（含 file@start_sec、prob_*、pred_*、pred_labels）。
+- **展示与试听**：按音频汇总图（每窗两柱，排序）、每图下方附整段试听；可选限制每文件窗口数或裁剪 mel 帧。
+
+### 本次完成
+1. 训练链路确认：窗口级 1s/0.5s、TARGET_SR=22050、LABEL_TO_ID={glass:0, gunshot:1}，多标签 BCE+sigmoid；fold 分布展示行=label、列=fold，指标稳定。
+2. 推理 notebook 重写：新增 glob/load_and_slice/pad_mels/prepare_batch/apply_thresholds；支持批量音频自动切窗、批量前向，生成窗口级概率与标签。
+3. 可视化与试听改造：每音频一张条形图（窗口按 start_sec 排序、图高自适应），无多余 legend 警告；紧跟整段试听播放器便于听感对照。
+
+### 开发思路与原因
+- 保证 train/infer 切窗、采样率、特征一致，避免分布漂移；多标签 BCE 对齐 gunshot 引入。
+- 结果可读性：窗口级概率而非简单均值，按时间顺序与音频试听绑定，便于定位误判/漏判窗口。
+- 灵活入口：AUDIO_PATTERNS、SAMPLES_PER_FILE、MAX_FRAMES、THRESHOLDS、checkpoint 可在 notebook 顶部配置，兼容不同实验。
+
+### Insight / 巧思
+- 图高自适应窗口数，避免窗口多时挤压；legend 仅在存在时显示，消除警告。
+- 采用 file@start_sec 作为窗口 ID，同时保留 duration 与 prob_* 列，方便后续导出或事件合并。
+- 训练/推理同一套参数（1s/0.5s/22.05k/64 mels），减少调参时的偏移来源。
+
+### 使用示例 / 验证
+- 训练：加载最新窗口级索引 CSV（glass/gun/background），保持 BCE+sigmoid；验证 fold 分布后运行训练单元。
+- 推理：设置 AUDIO_PATTERNS 指向待测音频，运行“加载并切窗”“推理”“可视化+试听”单元；查看 pred_df 与按音频的条形图+整段试听。
+- 若需裁剪帧/限制窗口：配置 MAX_FRAMES 或 SAMPLES_PER_FILE；阈值、checkpoint 可根据实验调整。
+
+### TODO / Improvements
+- 将推理可视化封装为函数/CLI，便于批量测试与保存结果。
+- 为训练/推理补最小单测（label 映射、窗口切分、batch 形状、推理阈值逻辑）。
+- 后续若改用更重增强或多类标签，需同步更新推理侧阈值与可视化标签。
