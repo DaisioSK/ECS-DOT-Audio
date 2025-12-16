@@ -47,6 +47,7 @@ class TrainingArtifacts:
 
     history: list[dict]
     best_state_dict: dict
+    top_states: list[dict]
 
 
 __all__ = ["TinyGlassNet", "count_parameters", "TrainingArtifacts"]

@@ -30,15 +30,31 @@
 - `apply_simple_filter(y: np.ndarray, cutoff: float = 4000.0, sr: int = SR, kind: str = 'lowpass') -> np.ndarray`
   - 4 阶巴特沃斯低/高通，调节频带。
 
+## meta_utils.py
+- `load_meta_files(meta_files: Sequence[str | Path]) -> DataFrame`
+  - 读取并 concat 多个 meta CSV（统一 schema），不存在会报错。
+- `assign_folds_if_missing(df, k=5, seed=42) -> DataFrame`
+  - 对缺失 fold_id 的行用 filepath 哈希稳定分折，返回副本。
+- `map_canonical_labels(df, label_map: Dict[str, str], target_labels=None) -> DataFrame`
+  - 原始 label 映射到 canonical_label，附 is_target 标记，未映射的保持原样。
+- `balance_folds_multi(df, target_labels, ratios: Dict[str, float], seed=42) -> DataFrame`
+  - 按 fold 内目标比例抽取正类+背景（多标签看 canonical_label），返回平衡后的 df。
+- `attach_label_ids(df, target_labels=None) -> DataFrame`
+  - 添加 labels/label_ids/label 列（multi-hot 编码），用于后续 Dataset/索引。
+- `filter_by_audio_attrs(df, allowed_sr=None, allowed_channels=None, min_duration=None, max_duration=None) -> DataFrame`
+  - 按采样率/声道/时长过滤 meta 行。
+- `stratified_folds(df, k=5, seed=42, group_key="canonical_label", sub_key=None|Sequence[str], fold_column="fold_id") -> DataFrame`
+  - 标签分层分折，可选二级分层（如 weapon）；缺子键但有 `extra_meta` 时临时从 `{key}=...` 解析，不改原列，子类内部打乱并轮换偏移摊平余数。
+
 ## augment_pipeline.py
 - `PIPELINE_REGISTRY: Dict[str, Sequence[str]]`
-  - 内置 6 种增强组合（shift_gain、stretch_reverb、shift_mix、filter_gain、gain_mix、stretch_filter）。
+  - 注册的增强组合（时域/混响/混音/滤波/增益等），可自定义或复用内置组合。
 - `AugmentedWindow(audio: np.ndarray, description: str)`
   - 增强结果容器，保存波形和文字描述。
 - `apply_pipeline(y: np.ndarray, pipeline: Sequence[str>, background: np.ndarray | None = None) -> np.ndarray`
-  - 按序执行原语，遇到 mix 必须给背景。例：`apply_pipeline(win, ["time_shift","mix"], bg)`.
+  - 按序执行原语，遇到 mix 必须给背景。例：`apply_pipeline(win, ["time_stretch","mix"], bg)`.
 - `run_pipeline(y: np.ndarray, pipeline_name: str, background: np.ndarray | None = None) -> AugmentedWindow`
-  - 按名称调用注册组合，返回带描述的结果。例：`run_pipeline(win, "shift_mix", background=bg)`.
+  - 按名称调用注册组合，返回带描述的结果。
 - `choose_pipeline(name: str | None = None) -> Sequence[str>`
   - 随机或按名选择 pipeline，便于随机增强。
 
@@ -187,12 +203,12 @@
   - 计算宏 P/R/F1 和 subset acc（内部）。
 - `_run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device, optimizer: torch.optim.Optimizer | None = None, grad_clip_norm: float | None = None) -> (EpochResult, torch.Tensor, torch.Tensor)`
   - 单轮训练/验证核心，自动处理 CrossEntropy+多热回退 BCE，返回指标、预测、真值。
-- `train_model(model, train_loader, val_loader, epochs, criterion, optimizer, device, scheduler=None, early_stopping_patience=5, grad_clip_norm=None) -> TrainingArtifacts`
-  - 训练主循环，含早停与 LR 调度。例：`artifacts = train_model(model, tr_loader, val_loader, 30, criterion, optim, device)`。
+- `train_model(model, train_loader, val_loader, epochs, criterion, optimizer, device, scheduler=None, early_stopping_patience=None|int=5, grad_clip_norm=None, best_key="f1", maximize=None, top_k=1) -> TrainingArtifacts`
+  - 训练主循环，含早停/LR 调度；`best_key` 选优（loss 自动 minimize），`top_k` 保留前 K checkpoint，支持 early_stopping_patience=None 关闭早停。
 - `evaluate_model(model, loader, criterion, device) -> Dict[str, float>`
   - 验证集快速评估。
-- `run_kfold_training(k, fold_ids, index_df, build_loaders_fn, model_builder, criterion_builder, optimizer_builder, scheduler_builder=None, device=None, output_dir=None, epochs=20, early_stopping=5, grad_clip_norm=None, **loader_kwargs) -> List[Dict]`
-  - K 折 orchestrator：构建 loader/模型、训练并可保存各折 checkpoint。
+- `run_kfold_training(k, fold_ids, index_df, build_loaders_fn, model_builder, criterion_builder, optimizer_builder, scheduler_builder=None, device=None, output_dir=None, epochs=20, early_stopping=5, grad_clip_norm=None, best_key="f1", maximize=None, top_k_checkpoints=1, **loader_kwargs) -> List[Dict]`
+  - K 折 orchestrator：按 `best_key` 选优，可保存 top-K checkpoint（`tinyglassnet_fold{n}_top{k}.pt`），返回各折 metrics/history/best_state/top_states。
 
 ## viz.py
 - `plot_wave_and_mel(row: pd.Series | None = None, y: np.ndarray | None = None, sr: int | None = None, title: str | None = None) -> None`

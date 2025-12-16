@@ -686,3 +686,65 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 将推理可视化封装为函数/CLI，便于批量测试与保存结果。
 - 为训练/推理补最小单测（label 映射、窗口切分、batch 形状、推理阈值逻辑）。
 - 后续若改用更重增强或多类标签，需同步更新推理侧阈值与可视化标签。
+
+
+## 2025-12-16 16:14:25 +08 Session (Train 曲线+量化校准集)
+
+### TL;DR
+- 训练 Notebook 增加训练曲线可视化（loss/val metrics/lr），EARLY_STOPPING 注释明确为 patience=8 epoch。
+- 新增 PTQ 量化校准集抽样：从最佳 fold 训练折（非验证折）按标签分层抽取 5%，写出 `cache/experiments/calibration_index.csv`，不重训。
+
+### 本次完成
+1. 配置：CALIBRATION_RATIO/CALIBRATION_PATH/CALIBRATION_SEED；EARLY_STOPPING 注释清晰。
+2. 曲线：loss、val 指标、lr 三栏可视化，列缺失时自动隐藏。
+3. 校准集：从 train_folds (fold!=best_fold) 按 label 分层抽样 5%，至少 1 条/类；打印计数并保存 CSV 供 PTQ 使用。
+
+### 使用示例 / 验证
+- 跑完 K-fold 后执行“Plot Training Curves”看收敛与 lr；运行“Build Calibration Set (for PTQ)”生成并保存校准索引，检查打印的标签计数。
+- 校准集用于 PTQ 校准，不参与重训；若需不同比例可调 CALIBRATION_RATIO。
+
+### TODO / Improvements
+ - 在 PTQ 流程中消费 calibration_index.csv 并记录量化精度；如精度掉点大，再考虑短暂 QAT 微调。
+ - 若多标签扩展或类别失衡，校准集可改为分层按 label_ids 采样。 
+
+
+## 2025-12-16 12:12:11 +08 Session (Capstone Sprint #3 | 数据平衡+增强/训练稳健性)
+
+### TL;DR
+- 折分：`stratified_folds` 支持二级分层（子键列表，缺列可从 extra_meta 临时解析），确保枪的不同 weapon 均匀落入各 fold。
+- 增强：移除 shift，固定顺序“stretch/reverb → mix → filter → gain”，先保留全部 base，再用剩余额度增广，枪类配额提升缓解偏科。
+- 训练：`train_model/run_kfold_training` 支持 `best_key`/`maximize`/`top_k`，早停可 None；K 折默认保存 top-3 checkpoint；标签映射检查单元确保列序一致。
+
+### 项目状态（宏观→微观）
+- 宏观：Capstone Sprint #3（事件检测/多标签）；数据准备与训练链路可跑，当前聚焦枪/玻璃平衡与鲁棒性。
+- 数据：多源 meta，22.05k mono；折分按 label+weapon 分层；枪样本与增广配额提高。
+- 增强：无 shift，gain 常开，组合按时序/频域合理顺序，base 必定保留。
+- 训练：BCE+sigmoid 多标签；指标支持自定义选优，top-3 checkpoint 保存；标签列检查通过。
+
+### 本次达成
+1) 分层折分增强：`stratified_folds` 支持子键列表、临时解析 extra_meta，不改原 df；子类轮换偏移分折，武器分布更均衡。  
+2) 增强策略收敛：去掉 shift，按“stretch/reverb→mix→filter→gain”组合，拆分轻/中/重；先写入所有 base，再用 `target - base` 额度增广，枪配额上调。  
+3) 训练稳健：`train_model`/`run_kfold_training` 增 `best_key`/`maximize`/`top_k`，early_stopping 可 None，默认保存 top-3；标签检查 cell 确认 TARGET_LABELS/LABEL_TO_ID/目标矩阵列序一致。  
+4) 文档同步：module_interfaces 补全 meta_utils、训练接口新签名；dev_log 记录最新变更。  
+
+### 开发思路与关键改动
+- 背景→痛点：枪类偏科，部分 weapon 集中某折；增广可能挤掉 base，训练选优单一 checkpoint 易漏好解。  
+- 方案：二级分层均衡 weapon；保留全部 base 后再增广；增强顺序固定避免过度失真；训练支持多指标+top-k 保存。  
+- 细节：`stratified_folds` 子键列表，缺列从 `{key}=...` 临时解析；分折时子类独立打乱并轮换 offset 摊平余数。增广配额用剩余额度，避免 base 流失；shift 去除以防峰值出窗；枪配额提升补数据。  
+- 训练选优：`best_key` 默认 F1，可换 loss/其他；early_stopping None 时不触发；保存 top-3 `tinyglassnet_fold{n}_top{k}.pt` 便于后验挑选。  
+
+### Insight / 巧思
+- “Base 全保留 + 剩余配额增广”兼顾真实分布与鲁棒性，不再被合成样本淹没。  
+- 二级分层用子键列表+临时解析兼容多源 meta（有列用列，无列用 extra_meta），返回 schema 不变便于后续 merge。  
+- 增强顺序固定（时域/混响→mix→filter→gain）可控扰动强度，减少多次 mix/stretch 累积失真。  
+- top-3 checkpoint 保存防止早期好模型被覆盖，支持多指标选优。  
+
+### 使用示例 / 测试
+- 分层折分：`folded_df = stratified_folds(df, k=5, seed=SEED, group_key="canonical_label", sub_key=["weapon","weapon_id"])`；`pivot` 查看 weapon x fold 分布。  
+- 增广：先写 base，再用 `target - len(win_pool)` 增广，保持总量；pipeline 按新顺序调用 `run_pipeline`。  
+- 训练：`run_kfold_training(..., best_key="f1", top_k_checkpoints=3, early_stopping=None)`；标签检查 cell 打印 TARGET_LABELS/LABEL_TO_ID 与 batch 目标形状。  
+
+### TODO / Improvements
+- 在外部枪集合重新评估当前增强/配额，如枪召回仍低，调 mix SNR/滤波强度或增广份额。  
+- 如需 per-class 阈值/校准，补阈值搜索与推理参数化；PTQ 流程消化 calibration_index。  
+- 后续为训练/推理补最小单测（折分、标签映射、batch 形状、top-k 保存）。 

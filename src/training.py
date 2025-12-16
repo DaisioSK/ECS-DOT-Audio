@@ -103,13 +103,32 @@ def train_model(model: nn.Module,
                 optimizer: torch.optim.Optimizer,
                 device: torch.device,
                 scheduler: torch.optim.lr_scheduler._LRScheduler | torch.optim.lr_scheduler.ReduceLROnPlateau | None = None,
-                early_stopping_patience: int = 5,
-                grad_clip_norm: float | None = None) -> TrainingArtifacts:
+                early_stopping_patience: int | None = 5,
+                grad_clip_norm: float | None = None,
+                best_key: str = "f1",
+                maximize: bool | None = None,
+                top_k: int = 1) -> TrainingArtifacts:
     """Train model with early stopping and metric logging."""
     history: List[Dict] = []
     best_state = None
-    best_val_loss = float("inf")
+    maximize = True if maximize is None else maximize
+    if best_key.lower() == "loss":
+        maximize = False
+    best_score = -float("inf") if maximize else float("inf")
+    early_stop_enabled = early_stopping_patience is not None and early_stopping_patience > 0
+    patience = early_stopping_patience if early_stop_enabled else float("inf")
     epochs_without_improve = 0
+    top_states: List[Dict] = []
+
+    def _compare(new_score: float, ref_score: float) -> bool:
+        return new_score > ref_score if maximize else new_score < ref_score
+
+    def _update_top_states(state: Dict):
+        top_states.append(state)
+        default_score = -float("inf") if maximize else float("inf")
+        top_states.sort(key=lambda s: s.get("score", default_score), reverse=maximize)
+        while len(top_states) > top_k:
+            top_states.pop()
 
     for epoch in range(1, epochs + 1):
         train_result, _, _ = _run_epoch(
@@ -128,6 +147,14 @@ def train_model(model: nn.Module,
             optimizer=None,
         )
         current_lr = optimizer.param_groups[0]["lr"]
+        val_metrics = {
+            "loss": val_result.loss,
+            "accuracy": val_result.accuracy,
+            "precision": val_result.precision,
+            "recall": val_result.recall,
+            "f1": val_result.f1,
+        }
+        val_score = val_metrics.get(best_key, val_result.f1)
         history_entry = {
             "epoch": epoch,
             "train_loss": train_result.loss,
@@ -146,35 +173,41 @@ def train_model(model: nn.Module,
             scheduler.step()
         history_entry["lr"] = optimizer.param_groups[0]["lr"]
 
-        improved = val_result.loss < best_val_loss
+        improved = _compare(val_score, best_score)
         if improved:
-            best_val_loss = val_result.loss
+            best_score = val_score
             best_state = {
                 "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
-                "val_metrics": {
-                    "loss": val_result.loss,
-                    "accuracy": val_result.accuracy,
-                    "precision": val_result.precision,
-                    "recall": val_result.recall,
-                    "f1": val_result.f1,
-                },
+                "val_metrics": val_metrics,
+                "score": val_score,
+                "score_key": best_key,
+                "epoch": epoch,
                 "predictions": val_preds.cpu(),
                 "targets": val_targets.cpu(),
             }
             epochs_without_improve = 0
         else:
             epochs_without_improve += 1
+        _update_top_states({
+            "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+            "val_metrics": val_metrics,
+            "score": val_score,
+            "score_key": best_key,
+            "epoch": epoch,
+        })
         print(
             f"[Epoch {epoch:02d}] "
             f"train_loss={train_result.loss:.4f} val_loss={val_result.loss:.4f} "
             f"val_acc={val_result.accuracy:.3f} val_f1={val_result.f1:.3f}"
         )
-        if epochs_without_improve >= early_stopping_patience:
+        if early_stop_enabled and epochs_without_improve >= patience:
             print("Early stopping triggered.")
             break
     if best_state is None:
-        best_state = {"model": model.state_dict(), "val_metrics": {}}
-    return TrainingArtifacts(history=history, best_state_dict=best_state)
+        best_state = {"model": model.state_dict(), "val_metrics": {}, "score": None, "score_key": best_key, "epoch": epoch}
+    if not top_states:
+        top_states = [{"model": best_state.get("model", model.state_dict()), "val_metrics": best_state.get("val_metrics", {}), "score": best_state.get("score"), "score_key": best_key, "epoch": best_state.get("epoch", None)}]
+    return TrainingArtifacts(history=history, best_state_dict=best_state, top_states=top_states)
 
 
 def evaluate_model(model: nn.Module,
@@ -205,6 +238,9 @@ def run_kfold_training(k: int,
                        epochs: int = 20,
                        early_stopping: int = 5,
                        grad_clip_norm: float | None = None,
+                       best_key: str = "f1",
+                       maximize: bool | None = None,
+                       top_k_checkpoints: int = 1,
                        **loader_kwargs) -> List[Dict]:
     """Run K-fold training, returning metrics per fold."""
     device = device or torch.device("cpu")
@@ -234,35 +270,49 @@ def run_kfold_training(k: int,
             scheduler=scheduler,
             early_stopping_patience=early_stopping,
             grad_clip_norm=grad_clip_norm,
+            best_key=best_key,
+            maximize=maximize,
+            top_k=top_k_checkpoints,
         )
         best_state = artifacts.best_state_dict
         metrics = best_state.get("val_metrics", {}).copy()
+        top_states = artifacts.top_states
         record = {
             "fold": fold,
             "train_folds": train_folds,
             "metrics": metrics,
             "history": artifacts.history,
             "best_state": best_state,
+            "top_states": top_states,
             "checkpoint_path": None,
         }
         if output_dir:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
-            ckpt_path = output_dir / f"tinyglassnet_fold{fold}.pt"
             num_classes = getattr(model, "classifier", None)
             num_classes = getattr(num_classes, "out_features", None) if num_classes is not None else None
-            torch.save(
-                {
-                    "model_state_dict": best_state["model"],
-                    "val_metrics": best_state.get("val_metrics", {}),
-                    "fold": fold,
-                    "train_folds": train_folds,
-                    "num_classes": num_classes,
-                },
-                ckpt_path,
-            )
-            print(f"Saved fold checkpoint to {ckpt_path}")
-            record["checkpoint_path"] = str(ckpt_path)
+            # Save top-k checkpoints, keep the best path for backward compatibility.
+            saved_paths = []
+            for rank, state in enumerate(top_states, start=1):
+                ckpt_path = output_dir / f"tinyglassnet_fold{fold}_top{rank}.pt"
+                torch.save(
+                    {
+                        "model_state_dict": state["model"],
+                        "val_metrics": state.get("val_metrics", {}),
+                        "fold": fold,
+                        "train_folds": train_folds,
+                        "num_classes": num_classes,
+                        "epoch": state.get("epoch"),
+                        "score": state.get("score"),
+                        "score_key": state.get("score_key", best_key),
+                    },
+                    ckpt_path,
+                )
+                saved_paths.append(str(ckpt_path))
+                if rank == 1:
+                    record["checkpoint_path"] = str(ckpt_path)
+            record["top_checkpoint_paths"] = saved_paths
+            print(f"Saved fold top-{len(saved_paths)} checkpoints to {output_dir}")
         fold_records.append(record)
     return fold_records
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
-
+import re
 import numpy as np
 import pandas as pd
 
@@ -194,35 +194,65 @@ def stratified_folds(df: pd.DataFrame,
                      k: int = 5,
                      seed: int = 42,
                      group_key: str = "canonical_label",
-                     sub_key: str | None = None,
+                     sub_key: str | Sequence[str] | None = None,
                      fold_column: str = "fold_id") -> pd.DataFrame:
-    """Assign folds with stratification by label and optional subgroup, aiming for even counts."""
+    """Assign folds with stratification by label and optional subgroup, aiming for even counts.
+
+    Notes:
+    - sub_key can be a column name or a list/tuple of candidate keys.
+    - If the key is absent but `extra_meta` exists, a temporary sub value will be parsed
+      from pattern `{key}=...`. The returned df schema is unchanged.
+    """
     rng = np.random.default_rng(seed)
+    df = df.copy()
+
+    # normalize candidate keys to list
+    cand_keys: Sequence[str] = []
+    if sub_key:
+        if isinstance(sub_key, (list, tuple)):
+            cand_keys = list(sub_key)
+        else:
+            cand_keys = [sub_key]
+
     parts: List[pd.DataFrame] = []
 
     for _, gdf in df.groupby(group_key):
-        if sub_key and sub_key in gdf.columns:
-            # Interleave sub-groups to keep subcategory balanced
-            pools = []
-            for _, sdf in gdf.groupby(sub_key):
+        use_sub: pd.Series | None = None
+        if cand_keys:
+            # choose first available column key
+            for key in cand_keys:
+                if key in gdf.columns:
+                    use_sub = gdf[key]
+                    break
+            # if none found, try parsing from extra_meta
+            if use_sub is None and "extra_meta" in gdf.columns:
+                for key in cand_keys:
+                    pattern = fr"{re.escape(key)}=([^,;]+)"
+                    parsed = gdf["extra_meta"].apply(
+                        lambda val: (re.search(pattern, val).group(1).strip() if isinstance(val, str) and re.search(pattern, val) else "unknown")
+                    )
+                    if parsed.notna().any():
+                        use_sub = parsed
+                        break
+
+        if use_sub is not None:
+            # Per-subgroup fold assignment, allow offset to spread remainders
+            sub_parts: List[pd.DataFrame] = []
+            offset = 0
+            for _, sdf in gdf.assign(__sub=use_sub).groupby("__sub"):
                 idx = np.arange(len(sdf))
                 rng.shuffle(idx)
-                pools.append(sdf.iloc[idx].copy())
-            ordered_rows = []
-            # Round-robin pull one sample per subgroup until all empty
-            while any(len(p) > 0 for p in pools):
-                for p in pools:
-                    if len(p) > 0:
-                        ordered_rows.append(p.iloc[0])
-                        p.drop(p.index[0], inplace=True)
-            gdf_ordered = pd.DataFrame(ordered_rows)
+                fold_ids = ((idx + offset) % k) + 1
+                offset = (offset + len(sdf)) % k
+                sdf_local = sdf.iloc[idx].drop(columns="__sub").copy()
+                sdf_local[fold_column] = fold_ids
+                sub_parts.append(sdf_local)
+            gdf_ordered = pd.concat(sub_parts, ignore_index=False)
         else:
             idx = np.arange(len(gdf))
             rng.shuffle(idx)
             gdf_ordered = gdf.iloc[idx].copy()
 
-        fold_ids = (np.arange(len(gdf_ordered)) % k) + 1
-        gdf_ordered[fold_column] = fold_ids
         parts.append(gdf_ordered)
 
     if not parts:

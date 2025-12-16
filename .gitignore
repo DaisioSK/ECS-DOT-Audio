@@ -5,3 +5,4 @@ data/**/*.mp3
 /cache_old
 **/.ipynb_checkpoints/
 **/__pycache__
+/backup

@@ -40,6 +40,62 @@ def confusion_matrix(preds: torch.Tensor,
     return matrix
 
 
+def multilabel_confusion(preds: torch.Tensor,
+                         targets: torch.Tensor,
+                         threshold: float = 0.5) -> np.ndarray:
+    """Compute per-class 2x2 confusion for multi-label (tp/fp/fn/tn per class)."""
+    preds = preds.detach().cpu().float()
+    targets = targets.detach().cpu().float()
+    # Align shapes if mismatch
+    if preds.dim() == 1:
+        preds = preds.unsqueeze(1)
+    if targets.dim() == 1:
+        targets = targets.unsqueeze(1)
+    if preds.shape[1] != targets.shape[1]:
+        c = min(preds.shape[1], targets.shape[1])
+        preds = preds[:, :c]
+        targets = targets[:, :c]
+    pred_bin = (preds >= threshold).float()
+    targ_bin = (targets >= 0.5).float()
+    tp = (pred_bin * targ_bin).sum(dim=0)
+    fp = (pred_bin * (1 - targ_bin)).sum(dim=0)
+    fn = ((1 - pred_bin) * targ_bin).sum(dim=0)
+    tn = ((1 - pred_bin) * (1 - targ_bin)).sum(dim=0)
+    # shape: (num_classes, 4) -> [tn, fp, fn, tp]
+    return torch.stack([tn, fp, fn, tp], dim=1).numpy()
+
+
+def plot_multilabel_confusions(confusions: np.ndarray,
+                               class_names: Sequence[str],
+                               normalize: bool = False) -> Tuple[plt.Figure, Sequence[plt.Axes]]:
+    """Plot per-class 2x2 confusion matrices for multi-label outputs."""
+    n_classes = confusions.shape[0]
+    fig, axes = plt.subplots(1, n_classes, figsize=(3 * n_classes, 3), squeeze=False)
+    axes = axes.ravel()
+    for idx, (ax, name) in enumerate(zip(axes, class_names)):
+        tn, fp, fn, tp = confusions[idx]
+        mat = np.array([[tn, fp], [fn, tp]], dtype=float)
+        if normalize:
+            denom = mat.sum() + 1e-8
+            mat = mat / denom
+        im = ax.imshow(mat, cmap="Blues", vmin=0, vmax=mat.max() + 1e-8)
+        ax.set_title(name)
+        ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+        ax.set_xticklabels(["Pred 0", "Pred 1"])
+        ax.set_yticklabels(["True 0", "True 1"])
+        vmax = mat.max() if mat.size else 0.0
+        for i in range(2):
+            for j in range(2):
+                val = mat[i, j]
+                text = f"{val:.2f}" if normalize else f"{int(val)}"
+                color = "white" if vmax and val > vmax * 0.6 else "black"
+                ax.text(j, i, text, ha="center", va="center", color=color, fontsize=10, fontweight="bold")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.suptitle("Multi-label Confusion Matrices" + (" (Normalized)" if normalize else ""))
+    fig.tight_layout()
+    return fig, axes
+
+
 def plot_confusion_matrix(matrix: np.ndarray,
                           class_names: Sequence[str],
                           normalize: bool = False,
@@ -66,4 +122,9 @@ def plot_confusion_matrix(matrix: np.ndarray,
     return ax
 
 
-__all__ = ["confusion_matrix", "plot_confusion_matrix"]
+__all__ = [
+    "confusion_matrix",
+    "plot_confusion_matrix",
+    "multilabel_confusion",
+    "plot_multilabel_confusions",
+]
