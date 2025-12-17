@@ -172,7 +172,7 @@
 - `InferenceResult(logits: torch.Tensor, probs: torch.Tensor, preds: torch.Tensor)`
   - 推理输出容器，包含 logits、sigmoid 概率和阈值化预测。
 - `load_torch_checkpoint(checkpoint_path, device="cpu", num_classes=None) -> (TinyGlassNet, Dict)`
-  - 载入 checkpoint，构建模型并返回载荷。例：`model, payload = load_torch_checkpoint("tinyglassnet_best.pt")`。
+  - 载入 checkpoint，构建模型并返回载荷。会对“是否包含 classifier.bias”做兼容（strict 加载但允许仅 bias 键不一致）。例：`model, payload = load_torch_checkpoint("tinyglassnet_best.pt")`。
 - `load_mel_batch(index_df, max_items=None) -> torch.Tensor`
   - 从索引加载 mel `.npy` 堆成 batch。例：`batch = load_mel_batch(df.head(8))`。
 - `run_torch_inference(model: TinyGlassNet, batch: torch.Tensor, device="cpu", threshold=0.5) -> InferenceResult`
@@ -185,6 +185,10 @@
 ## metrics.py
 - `confusion_matrix(preds: torch.Tensor, targets: torch.Tensor, num_classes: int = 2, normalize: bool = False) -> np.ndarray`
   - 支持多热/单 logit 的混淆矩阵计算，可选择归一化。
+- `multilabel_confusion(preds: torch.Tensor, targets: torch.Tensor, threshold: float = 0.5) -> np.ndarray`
+  - 多标签（BCE+sigmoid）专用：逐类统计 (TN, FP, FN, TP)。返回形状 `(num_classes, 4)`，每行对应一个 label。
+- `plot_multilabel_confusions(confusions: np.ndarray, class_names: Sequence[str], normalize: bool = False) -> (plt.Figure, Sequence[plt.Axes])`
+  - 把 `multilabel_confusion` 的输出画成每个 label 一张 2×2 小混淆矩阵（支持归一化），适合排查“gun 被当 glass”这类 per-class 偏差。
 - `plot_confusion_matrix(matrix: np.ndarray, class_names: Sequence[str], normalize: bool = False, ax: plt.Axes | None = None) -> plt.Axes`
   - 画混淆矩阵热力图并标注数值。例：`plot_confusion_matrix(cm, ["bg","glass"])`。
 
@@ -193,8 +197,8 @@
   - 3×Conv+ReLU+Pool + GAP + FC 的轻量 CNN，`forward(x) -> logits`，易导出 ONNX，适合 Edge。
 - `count_parameters(model: nn.Module) -> int`
   - 计算可训练参数总数。
-- `TrainingArtifacts(history: list[dict], best_state_dict: dict)`
-  - 训练产物容器，包含历史记录与最佳状态。
+- `TrainingArtifacts(history: list[dict], best_state_dict: dict, top_states: list[dict])`
+  - 训练产物容器：`history` 保存每个 epoch 的日志；`best_state_dict` 保存最佳 checkpoint 的权重；`top_states` 保存 top-k 的候选（便于后验比较与导出）。
 
 ## training.py
 - `EpochResult(loss: float, accuracy: float, precision: float, recall: float, f1: float)`

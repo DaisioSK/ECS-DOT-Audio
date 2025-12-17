@@ -31,7 +31,12 @@ def load_torch_checkpoint(checkpoint_path: str | Path,
         raise KeyError("Checkpoint missing 'model_state_dict' or 'model' keys.")
     inferred_classes = num_classes or payload.get("num_classes") or NUM_CLASSES
     model = TinyGlassNet(num_classes=int(inferred_classes))
-    model.load_state_dict(state_dict)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    # 忽略 classifier.bias 缺失/多余等非关键项
+    if unexpected and unexpected != ["classifier.bias"]:
+        raise RuntimeError(f"Unexpected keys when loading state_dict: {unexpected}")
+    if missing and missing != ["classifier.bias"]:
+        raise RuntimeError(f"Missing keys when loading state_dict: {missing}")
     model.to(device)
     model.eval()
     return model, payload

@@ -28,7 +28,7 @@ class TinyGlassNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d((1, 1)),
         )
-        self.classifier = nn.Linear(c3, num_classes)
+        self.classifier = nn.Linear(c3, num_classes, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)

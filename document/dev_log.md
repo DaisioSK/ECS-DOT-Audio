@@ -748,3 +748,72 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 在外部枪集合重新评估当前增强/配额，如枪召回仍低，调 mix SNR/滤波强度或增广份额。  
 - 如需 per-class 阈值/校准，补阈值搜索与推理参数化；PTQ 流程消化 calibration_index。  
 - 后续为训练/推理补最小单测（折分、标签映射、batch 形状、top-k 保存）。 
+
+
+## 2025-12-17 11:30:46 +08 Session (Deployment exports：ONNX / 权重全量 / NPZ 数据包)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3「事件检测验证」后半段（工程落地）。
+- **Capstone**：从 Notebook 原型走向可部署产物（model + data）。
+- **Tasks**：
+  - Task-Dep-1 模型导出（PyTorch → ONNX，静态输入）。
+  - Task-Dep-2 导出可读结构与全量权重（JSON + npy/log）。
+  - Task-Dep-3 导出量化/评估数据（test/calib NPZ），保证 label/shape 与训练一致。
+
+### TL;DR
+- 把“训练出来的 `.pt`”变成“部署能用的一揽子产物”：ONNX、结构 JSON、权重全量 dump、test/calib NPZ。
+- 修复若干常见坑：checkpoint 有/无 bias 的兼容加载、`label_ids` 在 CSV 中被当成字符串导致解析错、multi-label 背景不该用 argmax 强行变成某一类。
+
+### 项目状态（宏观→微观）
+- **宏观**：prepare/train/infer 能跑通后，进入部署打包阶段；目标是让后续量化/嵌入式侧不再依赖 Notebook 运行环境。
+- **模型**：TinyGlassNet（BCE + sigmoid，多标签输出维度=2：glass/gunshot；background 通过全零向量表示）。
+- **特征**：log-mel `n_mels=64`，缓存阶段已统一裁剪/补齐到 `TARGET_FRAMES=84`（因此单样本形状 `(1, 64, 84)`）。
+- **产物目录**：
+  - `cache/experiments/`：训练侧 best checkpoint、kfold checkpoints、history、calibration_index。
+  - `cache/exports/`：部署导出物（ONNX/NPZ/结构/权重 log/npy）。
+  - `artifacts/`：手工挑选/外部来源模型或中间产物（如 tiny-audio-net.pt、calib json）。
+
+### 本次 Session 达成的目标
+1. 导出 ONNX：确认输入 shape 与训练一致，并产出静态输入版本，方便后续工具链（某些量化工具不吃动态轴）。
+2. 导出“结构 + 权重”：让 Edge/量化侧可以直接读 JSON 知道每层形状与参数；权重以 `.npy`/log 全量落盘，避免打印 `...` 截断。
+3. 导出数据 NPZ：从索引 CSV 构造 test fold 与 calib 子集，并把 key/schema 固化，避免后续接口对不上。
+
+### 开发思路与关键改动（为什么要这么做）
+- **背景→痛点**：Notebook 里“能跑”不代表“能交付”。部署通常需要：
+  - 可重复的模型格式（ONNX）。
+  - 明确的输入输出 shape（静态更稳定）。
+  - 权重可检查/可导入（全量 dump）。
+  - 校准/评估数据（NPZ）和明确 label 语义（multi-label 背景不能硬塞成某个类）。
+- **方案定义**：把导出目标拆成“模型（ONNX/结构/权重）”与“数据（test/calib NPZ）”两条线，最终合并成一个 deploy bundle。
+
+### 关键产物（落盘结果）
+- **ONNX**
+  - `cache/exports/tiny-audio-net.onnx`、`cache/exports/tiny-audio-net_static.onnx`
+  - `cache/experiments/tinyglassnet_best.onnx`（训练侧 best 导出）
+- **结构**
+  - `cache/exports/tinyglassnet_structure.json`：按层列出类型、kernel/stride/padding、输入/输出形状等（给量化/嵌入式对接用）。
+- **权重**
+  - `cache/exports/tiny-audio-net.weights.log`：可读文本，全量数值（无 `...`）。
+  - `cache/exports/weights_npy/`：每个权重张量单独 `.npy`（适合脚本化加载或逐层校验）。
+- **数据 NPZ**
+  - `cache/exports/test_fold.npz`、`cache/exports/calib_10pct.npz`（也有其它比例版本）
+  - Key 约定：`imgs` (float32, `(B,1,64,84)`), `y` (float32, `(B,2)` multi-hot), `labels` (int64, `(B,)`)
+    - 其中 `labels=-1` 表示 background（因为 multi-hot `[0,0]` 用 argmax 会丢语义）。
+
+### 典型使用示例 / 验证方式
+- **快速看导出物是否一致**
+  - 检查 ONNX 输入：`(1, 1, 64, 84)` 是否符合缓存特征。
+  - 检查 NPZ keys：`np.load(...).files` 应包含 `imgs/labels/y`，并核对 shape。
+  - 检查标签：`np.unique(labels, return_counts=True)` 应包含 `-1/0/1`（背景/玻璃/枪声），与 fold 配额一致。
+
+### Insight / 巧思
+- multi-label 的背景不是“第三类”，而是“所有目标类都为 0”。因此导出数据时要同时保留：
+  - `y`（multi-hot，训练/多标签量化真实语义）
+  - `labels`（单标签视图，给某些 legacy pipeline/工具用，但 background 必须用 -1 保住语义）
+- 导出结构 JSON 的目的不是“复刻 PyTorch 打印”，而是让对接方能直接回答：每层是什么算子、参数是什么、输入输出 shape 如何。
+
+### TODO / Improvements（继承）
+- 把“导出 bundle”封装成 CLI（给定 `--pt`、`--index`、`--val-fold`、`--frames` 一键生成 ONNX/JSON/NPZ/weights），减少 Notebook 复制粘贴。
+- NPZ 导出支持按 fold/label_ids 分层抽样（保证 calib 更稳），并把抽样策略写入 `tiny-audio-net-calib.json` 里版本化。
+- 后续接 PTQ 工具链时，明确它要求的是 `labels` 还是 `y`，避免再发生“背景全变 0 类”的误用。 
+

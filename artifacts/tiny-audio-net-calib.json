@@ -1,0 +1,80 @@
+{
+  "input": {
+    "scale": 0.004961220767554336,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.0/Conv_output_0": {
+    "scale": 0.005333199745088111,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.1/Relu_output_0": {
+    "scale": 0.007797973831807535,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.2/MaxPool_output_0": {
+    "scale": 0.007797973831807535,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.3/Conv_output_0": {
+    "scale": 0.007318641257098341,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.4/Relu_output_0": {
+    "scale": 0.006738946663113091,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.5/MaxPool_output_0": {
+    "scale": 0.006738946663113091,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.6/Conv_output_0": {
+    "scale": 0.007526336223121703,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.7/Relu_output_0": {
+    "scale": 0.007526336223121703,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/features/features.8/GlobalAveragePool_output_0": {
+    "scale": 0.0035719085396744136,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "/Flatten_output_0": {
+    "scale": 0.0035719085396744136,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "(Unnamed Layer* 10) [Constant]_output": {
+    "scale": 2.218570787547611e-05,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  },
+  "logits": {
+    "scale": 0.004084431280301312,
+    "min": 0,
+    "max": 0,
+    "offset": 0
+  }
+}
