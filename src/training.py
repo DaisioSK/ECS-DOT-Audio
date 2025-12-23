@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
@@ -107,7 +108,9 @@ def train_model(model: nn.Module,
                 grad_clip_norm: float | None = None,
                 best_key: str = "f1",
                 maximize: bool | None = None,
-                top_k: int = 1) -> TrainingArtifacts:
+                top_k: int = 1,
+                select_last_ratio: float = 0.1,
+                train_loss_tolerance: float = 0.2) -> TrainingArtifacts:
     """Train model with early stopping and metric logging."""
     history: List[Dict] = []
     best_state = None
@@ -118,17 +121,12 @@ def train_model(model: nn.Module,
     early_stop_enabled = early_stopping_patience is not None and early_stopping_patience > 0
     patience = early_stopping_patience if early_stop_enabled else float("inf")
     epochs_without_improve = 0
-    top_states: List[Dict] = []
+    candidate_states: List[Dict] = []
 
     def _compare(new_score: float, ref_score: float) -> bool:
         return new_score > ref_score if maximize else new_score < ref_score
 
-    def _update_top_states(state: Dict):
-        top_states.append(state)
-        default_score = -float("inf") if maximize else float("inf")
-        top_states.sort(key=lambda s: s.get("score", default_score), reverse=maximize)
-        while len(top_states) > top_k:
-            top_states.pop()
+    last_window = max(1, int(math.ceil(epochs * max(select_last_ratio, 0.0))))
 
     for epoch in range(1, epochs + 1):
         train_result, _, _ = _run_epoch(
@@ -159,6 +157,7 @@ def train_model(model: nn.Module,
             "epoch": epoch,
             "train_loss": train_result.loss,
             "train_acc": train_result.accuracy,
+            "train_f1": train_result.f1,
             "val_loss": val_result.loss,
             "val_acc": val_result.accuracy,
             "val_precision": val_result.precision,
@@ -184,29 +183,57 @@ def train_model(model: nn.Module,
                 "epoch": epoch,
                 "predictions": val_preds.cpu(),
                 "targets": val_targets.cpu(),
+                "train_loss": train_result.loss,
             }
             epochs_without_improve = 0
         else:
             epochs_without_improve += 1
-        _update_top_states({
+        candidate_states.append({
             "model": {k: v.detach().cpu() for k, v in model.state_dict().items()},
             "val_metrics": val_metrics,
             "score": val_score,
             "score_key": best_key,
             "epoch": epoch,
+            "train_loss": train_result.loss,
+            "predictions": val_preds.cpu(),
+            "targets": val_targets.cpu(),
         })
+        if len(candidate_states) > last_window:
+            candidate_states.pop(0)
         print(
             f"[Epoch {epoch:02d}] "
-            f"train_loss={train_result.loss:.4f} val_loss={val_result.loss:.4f} "
-            f"val_acc={val_result.accuracy:.3f} val_f1={val_result.f1:.3f}"
+            f"train_loss={train_result.loss:.4f} train_acc={train_result.accuracy:.3f} "
+            f"train_f1={train_result.f1:.3f} val_loss={val_result.loss:.4f} "
+            f"val_acc={val_result.accuracy:.3f} val_f1={val_result.f1:.3f} "
+            f"lr={current_lr:.6f}"
         )
         if early_stop_enabled and epochs_without_improve >= patience:
             print("Early stopping triggered.")
             break
+    if not candidate_states:
+        candidate_states = [best_state] if best_state is not None else []
+
+    filtered = candidate_states
+    if candidate_states:
+        losses = [c.get("train_loss", float("inf")) for c in candidate_states]
+        median_loss = float(torch.tensor(losses).median().item()) if losses else float("inf")
+        max_loss = median_loss * (1.0 + max(train_loss_tolerance, 0.0))
+        filtered = [c for c in candidate_states if c.get("train_loss", float("inf")) <= max_loss]
+        if not filtered:
+            filtered = candidate_states
+
+    default_score = -float("inf") if maximize else float("inf")
+    filtered.sort(key=lambda s: s.get("score", default_score), reverse=maximize)
+    top_states = filtered[:max(1, top_k)]
+    best_state = top_states[0] if top_states else best_state
     if best_state is None:
-        best_state = {"model": model.state_dict(), "val_metrics": {}, "score": None, "score_key": best_key, "epoch": epoch}
-    if not top_states:
-        top_states = [{"model": best_state.get("model", model.state_dict()), "val_metrics": best_state.get("val_metrics", {}), "score": best_state.get("score"), "score_key": best_key, "epoch": best_state.get("epoch", None)}]
+        best_state = {
+            "model": model.state_dict(),
+            "val_metrics": {},
+            "score": None,
+            "score_key": best_key,
+            "epoch": epoch,
+        }
     return TrainingArtifacts(history=history, best_state_dict=best_state, top_states=top_states)
 
 

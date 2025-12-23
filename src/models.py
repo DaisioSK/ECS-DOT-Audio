@@ -23,6 +23,7 @@ class TinyGlassNet(nn.Module):
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(c1, c2, kernel_size=3, padding=1, bias=False),
             nn.ReLU(inplace=True),
+            # nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1)),  # preserve more time resolution
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(c2, c3, kernel_size=3, padding=1, bias=False),
             nn.ReLU(inplace=True),

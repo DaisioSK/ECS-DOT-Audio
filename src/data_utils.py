@@ -14,6 +14,7 @@ from .config import (
     PROJECT_ROOT,
     HOP_LENGTH,
     META_FILE,
+    MEL_CENTER,
     N_FFT,
     N_MELS,
     POSITIVE_LABELS,
@@ -106,10 +107,12 @@ def log_mel_spectrogram(y: np.ndarray,
                         sr: int,
                         n_fft: int = N_FFT,
                         hop_length: int = HOP_LENGTH,
-                        n_mels: int = N_MELS) -> np.ndarray:
+                        n_mels: int = N_MELS,
+                        center: bool = MEL_CENTER) -> np.ndarray:
     """Compute a log-mel spectrogram tile (shape: n_mels x frames)."""
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft,
-                                         hop_length=hop_length, n_mels=n_mels)
+                                         hop_length=hop_length, n_mels=n_mels,
+                                         center=center)
     return librosa.power_to_db(mel, ref=np.max)
 
 
@@ -176,6 +179,7 @@ def generate_aligned_windows_legacy(row: pd.Series,
                                     energy_threshold: float = 0.2,
                                     peak_ratio_threshold: float = 0.7,
                                     front_peak_ratio: float = 0.5,
+                                    late_peak_keep_ratio: float = 0.8,
                                     trim_silence_before: bool = False,
                                     trim_top_db: float = 20.0,
                                     trim_min_keep_seconds: float = 0.0,
@@ -253,6 +257,8 @@ def generate_aligned_windows_legacy(row: pd.Series,
             peak_idx = int(np.argmax(energy))
             peak_ratio = energy[peak_idx] / energy_global
             peak_position = peak_idx / max(len(window), 1)
+            front_half_peak = float(np.max(energy[: max(1, len(energy) // 2)]))
+            front_half_ratio = front_half_peak / energy_global
             if debug_sink is not None:
                 debug_sink.append({
                     "start_sec": start_sec,
@@ -270,6 +276,12 @@ def generate_aligned_windows_legacy(row: pd.Series,
                     debug_sink[-1]["reason"] = "low_peak_ratio"
                 continue
             if peak_position > front_peak_ratio:
+                if front_half_ratio >= late_peak_keep_ratio:
+                    windows.append(window)
+                    if debug_sink is not None:
+                        debug_sink[-1]["status"] = "keep"
+                        debug_sink[-1]["reason"] = "late_peak_keep_front_energy"
+                    continue
                 if debug_sink is not None:
                     debug_sink[-1]["status"] = "skip"
                     debug_sink[-1]["reason"] = "late_peak"
@@ -348,6 +360,7 @@ def generate_aligned_windows(row: pd.Series,
                              energy_threshold: float = 0.2,
                              peak_ratio_threshold: float = 0.7,
                              front_peak_ratio: float = 0.5,
+                             late_peak_keep_ratio: float = 0.8,
                              trim_silence_before: bool = False,
                              trim_top_db: float = 20.0,
                              trim_min_keep_seconds: float = 0.0,
@@ -372,6 +385,7 @@ def generate_aligned_windows(row: pd.Series,
     energy_thr = get_param("energy_threshold", energy_threshold)
     peak_ratio_thr = get_param("peak_ratio_threshold", peak_ratio_threshold)
     front_peak_thr = get_param("front_peak_ratio", front_peak_ratio)
+    late_keep_thr = get_param("late_peak_keep_ratio", late_peak_keep_ratio)
     shifts = [0.0]
     if extra_shifts:
         shifts.extend(extra_shifts)
@@ -430,6 +444,8 @@ def generate_aligned_windows(row: pd.Series,
             peak_idx = int(np.argmax(energy))
             peak_ratio = energy[peak_idx] / energy_global
             peak_position = peak_idx / max(len(win), 1)
+            front_half_peak = float(np.max(energy[: max(1, len(energy) // 2)]))
+            front_half_ratio = front_half_peak / energy_global
 
             status = "keep"
             reason = "pass"
@@ -437,8 +453,12 @@ def generate_aligned_windows(row: pd.Series,
                 status = "skip"
                 reason = "low_peak_ratio"
             elif peak_position > front_peak_thr:
-                status = "skip"
-                reason = "late_peak"
+                if front_half_ratio >= late_keep_thr:
+                    status = "keep"
+                    reason = "late_peak_keep_front_energy"
+                else:
+                    status = "skip"
+                    reason = "late_peak"
 
             log_entry(start_sec, end_sec, status, reason, peak_ratio, peak_position)
             if status == "keep":

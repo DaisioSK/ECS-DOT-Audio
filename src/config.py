@@ -40,10 +40,14 @@ CACHE_MEL64.mkdir(parents=True, exist_ok=True)
 CACHE_DIR = CACHE_MEL64
 
 # Audio + feature parameters
-SR = 22050
+SR = 21333
 N_MELS = 64
 N_FFT = 1024
 HOP_LENGTH = 256
+# Log-mel framing behavior. `center=True` matches librosa defaults and most of our cached data.
+MEL_CENTER = False
+# Optional fixed number of frames for deployment (pad/crop time axis to this length).
+MEL_TARGET_FRAMES = None
 WINDOW_SECONDS = 1.0
 WINDOW_HOP = 0.5
 SEED = 42
@@ -85,23 +89,25 @@ POSITIVE_LABELS = {
 # Case study / event detection defaults
 CASE_STUDY_DIR = CACHE_DIR / "case_study"
 CASE_STUDY_META_FILES = META_FILES
-CASE_STUDY_DEFAULTS = {   'background_gain_db': -8.0,
-    'crossfade_ms': 15.0,
-    'gap_range': (0.2, 8.0),
-    'glass_gain_db': 0.0,
-    'hyst_high': None,
-    'hyst_low': None,
-    'merge_gap': 0.12,
-    'min_event_dur': 0.3,
-    'smooth_k': 1,
-    'snr_range_db': (4.0, 9.0),
-    'split_top_db': 20.0,
-    'start_offset_range': (0.5, 6.0),
-    'target_bed_duration': 80.0,
-    'threshold': 0.7,
-    'tolerance': 0.5,
-    'background_only': False,
-    'max_event_dur': 1.0}
+CASE_STUDY_DEFAULTS = {
+    "background_gain_db": -8.0,
+    "crossfade_ms": 15.0,
+    "gap_range": (0.2, 8.0),
+    "glass_gain_db": 0.0,
+    "hyst_high": None,
+    "hyst_low": None,
+    "merge_gap": 0.12,
+    "min_event_dur": 0.3,
+    "smooth_k": 1,
+    "snr_range_db": (4.0, 9.0),
+    "split_top_db": 20.0,
+    "start_offset_range": (0.5, 6.0),
+    "target_bed_duration": 80.0,
+    "threshold": 0.7,
+    "tolerance": 0.5,
+    "background_only": False,
+    "max_event_dur": 1.0,
+}
 
 CASE_STUDY_SCHEMA_VERSION = "v1"
 HARD_BG_CLASSES = [

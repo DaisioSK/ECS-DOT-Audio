@@ -240,11 +240,14 @@ def stratified_folds(df: pd.DataFrame,
             sub_parts: List[pd.DataFrame] = []
             offset = 0
             for _, sdf in gdf.assign(__sub=use_sub).groupby("__sub"):
-                idx = np.arange(len(sdf))
-                rng.shuffle(idx)
-                fold_ids = ((idx + offset) % k) + 1
+                # Shuffle rows first, then assign folds round-robin on the
+                # shuffled order to make per-subgroup distribution as even as
+                # possible (e.g. 10 items across 5 folds -> 2 each).
+                perm = np.arange(len(sdf))
+                rng.shuffle(perm)
+                fold_ids = ((np.arange(len(sdf)) + offset) % k) + 1
                 offset = (offset + len(sdf)) % k
-                sdf_local = sdf.iloc[idx].drop(columns="__sub").copy()
+                sdf_local = sdf.iloc[perm].drop(columns="__sub").copy()
                 sdf_local[fold_column] = fold_ids
                 sub_parts.append(sdf_local)
             gdf_ordered = pd.concat(sub_parts, ignore_index=False)

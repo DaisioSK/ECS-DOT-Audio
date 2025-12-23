@@ -33,10 +33,14 @@
 ## meta_utils.py
 - `load_meta_files(meta_files: Sequence[str | Path]) -> DataFrame`
   - 读取并 concat 多个 meta CSV（统一 schema），不存在会报错。
+- `deduplicate_meta(df: pd.DataFrame, subset: Sequence[str] | None = None) -> DataFrame`
+  - 按 `subset`（默认 `["md5","filepath"]`）去重，避免多源 meta 合并后同一音频重复出现（潜在数据泄漏/统计偏差）。
 - `assign_folds_if_missing(df, k=5, seed=42) -> DataFrame`
   - 对缺失 fold_id 的行用 filepath 哈希稳定分折，返回副本。
 - `map_canonical_labels(df, label_map: Dict[str, str], target_labels=None) -> DataFrame`
   - 原始 label 映射到 canonical_label，附 is_target 标记，未映射的保持原样。
+- `sample_gunshot_even(df: pd.DataFrame, target_label: str = "gunshot", total: int = 60, seed: int = 42) -> DataFrame`
+  - 在枪声子集中，尽量按 `weapon_id`（从 `extra_meta` 或父目录推断）均匀抽样到指定总数，避免模型只记住某一种枪声。
 - `balance_folds_multi(df, target_labels, ratios: Dict[str, float], seed=42) -> DataFrame`
   - 按 fold 内目标比例抽取正类+背景（多标签看 canonical_label），返回平衡后的 df。
 - `attach_label_ids(df, target_labels=None) -> DataFrame`
@@ -95,8 +99,8 @@
   - 围绕 RMS 峰值取窗，可再加偏移。
 - `_energy_mask(y: np.ndarray, sr: int, window_seconds: float, hop_seconds: float, threshold_ratio: float) -> np.ndarray`
   - 根据相对能量生成布尔掩码（内部）。
-- `generate_aligned_windows(row: pd.Series, align_labels: List[str], extra_shifts=None, energy_threshold=0.2, peak_ratio_threshold=0.7, front_peak_ratio=0.5, trim_silence_before=False, trim_top_db=20.0, trim_min_keep_seconds=0.0, debug=False, label_params=None, debug_sink: list | None = None) -> List[np.ndarray]`
-  - 正类：对裁静音后的波形滑窗，按峰值占比和峰值位置筛选；背景：按能量掩码筛窗；两者都在 `debug_sink` 记录“原始时间轴上的起止、状态、原因、峰值占比/位置”，并在无窗时用中心峰值兜底。默认参数从 `config.WINDOW_PARAMS` 读取（glass/gunshot/background 三套），`label_params` 可进一步覆写，`extra_shifts` 支持兜底偏移；`debug` 仅为兼容保留，不再打印。例：`logs=[]; wins = generate_aligned_windows(row, ["glass","gunshot"], label_params={"gunshot":{"peak_ratio_threshold":0.6}}, debug_sink=logs)`.
+- `generate_aligned_windows(row: pd.Series, align_labels: List[str], extra_shifts=None, energy_threshold=0.2, peak_ratio_threshold=0.7, front_peak_ratio=0.5, late_peak_keep_ratio=0.8, trim_silence_before=False, trim_top_db=20.0, trim_min_keep_seconds=0.0, debug=False, label_params=None, debug_sink: list | None = None) -> List[np.ndarray]`
+  - 正类：对裁静音后的波形滑窗，按峰值占比与峰值位置筛选；当触发 `late_peak` 时，若“前半段峰值 ≥ 全局峰值的 `late_peak_keep_ratio`（默认 0.8）”，则仍保留窗口（避免晚峰误丢）。背景：按能量掩码筛窗。所有候选都写入 `debug_sink`（起止/状态/原因/峰值占比/位置），无窗时用中心峰值兜底。默认参数来自 `config.WINDOW_PARAMS`（glass/gunshot/background 三套），`label_params` 可进一步覆写，`extra_shifts` 支持兜底偏移；`debug` 仅为兼容保留，不再打印。例：`logs=[]; wins = generate_aligned_windows(row, ["glass","gunshot"], label_params={"gunshot":{"late_peak_keep_ratio":0.8}}, debug_sink=logs)`.
 - `generate_aligned_windows_legacy(...)`
   - 旧版逻辑，保留向后兼容（可参考源码，推荐使用新版）。
 
@@ -207,7 +211,7 @@
   - 计算宏 P/R/F1 和 subset acc（内部）。
 - `_run_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device, optimizer: torch.optim.Optimizer | None = None, grad_clip_norm: float | None = None) -> (EpochResult, torch.Tensor, torch.Tensor)`
   - 单轮训练/验证核心，自动处理 CrossEntropy+多热回退 BCE，返回指标、预测、真值。
-- `train_model(model, train_loader, val_loader, epochs, criterion, optimizer, device, scheduler=None, early_stopping_patience=None|int=5, grad_clip_norm=None, best_key="f1", maximize=None, top_k=1) -> TrainingArtifacts`
+- `train_model(model, train_loader, val_loader, epochs, criterion, optimizer, device, scheduler=None, early_stopping_patience=None|int=5, grad_clip_norm=None, best_key="f1", maximize=None, top_k=1, select_last_ratio=0.1, train_loss_tolerance=0.2) -> TrainingArtifacts`
   - 训练主循环，含早停/LR 调度；`best_key` 选优（loss 自动 minimize），`top_k` 保留前 K checkpoint，支持 early_stopping_patience=None 关闭早停。
 - `evaluate_model(model, loader, criterion, device) -> Dict[str, float>`
   - 验证集快速评估。
@@ -217,6 +221,51 @@
 ## viz.py
 - `plot_wave_and_mel(row: pd.Series | None = None, y: np.ndarray | None = None, sr: int | None = None, title: str | None = None) -> None`
   - 绘制波形与 log-mel（可传 meta 行或直接 (y, sr)），可自定义标题。适合质检和演示。
+
+## preprocess.py
+- `AudioRecord(path: Path, y: np.ndarray, sr: int, sr0: int)`
+  - 轻量数据结构：记录音频文件路径、重采样后的 `y/sr`，以及原始采样率 `sr0`（debug 用，避免“sr0 打印其实是 target_sr”的误会）。
+- `WindowSlice(path: Path, start_sec: float, duration_sec: float, wave: np.ndarray, mel: np.ndarray)`
+  - “窗口级”数据结构：一个音频文件被切成多个固定长度窗口之后，每个窗口对应一条记录。
+  - `wave` 是该窗口的 waveform（长度≈`WINDOW_SECONDS * SR`），`mel` 是该窗口的 log-mel（形如 `(64, T)`，再由 `pad_or_crop_frames` 固定到 `MEL_TARGET_FRAMES`）。
+- `load_audio_file(path: Path | str, target_sr: int = SR, mono: bool = True, dtype: np.dtype = np.float32) -> AudioRecord`
+  - 在线推理/导出用的“训练一致”加载：先以 `sr=None` 读取原始 sr，再显式 resample 到 `target_sr`，返回 `(y, sr, sr0)`。
+  - 典型用法：`rec = load_audio_file(p, target_sr=SR); y = rec.y`。
+- `iter_sliding_windows(y: np.ndarray, sr: int, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, pad_short: bool = True) -> Iterable[(np.ndarray, float)]`
+  - 按固定窗长/步长切 waveform，返回 `(seg, start_sec)`；`pad_short=True` 时短音频会 zero-pad 到至少 1 个窗。
+- `log_mel(y: np.ndarray, sr: int, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = True) -> np.ndarray`
+  - 计算 log-mel（dB）：返回 `(n_mels, frames)`；`center=True` 时会导致 frames 增加（例如 1s@22050 + hop=256 → 87 帧），用于对齐训练/推理。
+- `pad_or_crop_frames(mel: np.ndarray, target_frames: int, mode: str = "constant") -> np.ndarray`
+  - 将 mel 的 time 轴裁剪/补零到固定帧数（例如 84/87），用于部署侧固定输入 shape。
+- `mel_to_bchw(mel: np.ndarray) -> np.ndarray`
+  - `(n_mels, frames) -> (1, 1, n_mels, frames)`，并转为 `float32`；常用于 ONNX 单样本推理输入打包。
+- `slice_audio_to_mels(record: AudioRecord, *, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, target_frames: int = MEL_TARGET_FRAMES, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = MEL_CENTER, pad_short: bool = True) -> list[WindowSlice]`
+  - 单文件入口：`AudioRecord` → 固定窗切片 → 每窗 log-mel → pad/crop 到固定帧数，输出一组 `WindowSlice`。
+  - 使用场景：infer/export 想对“某一条长音频”做滑窗推理时，先用它统一生成窗口特征。
+  - 典型用法：`slices = slice_audio_to_mels(load_audio_file(p), target_frames=84)`。
+- `slices_to_batch(slices: Sequence[WindowSlice], *, dtype: np.dtype = np.float32) -> np.ndarray`
+  - 将一组 `WindowSlice.mel` 打包成 CNN 需要的 batch：返回 `(B, 1, n_mels, frames)`（也就是 BCHW）。
+  - 这个 batch 是 numpy（方便 ONNX/导出）；在 torch 推理时通常再包一层：`torch.from_numpy(batch).float()`。
+- `files_to_slices_and_batch(paths: Sequence[Path | str], *, target_sr: int = SR, mono: bool = True, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, target_frames: int = MEL_TARGET_FRAMES, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = MEL_CENTER, pad_short: bool = True, max_files: int | None = None, max_slices_per_file: int | None = None, seed: int = 42) -> (list[AudioRecord], list[WindowSlice], np.ndarray)`
+  - 多文件“一键入口”：从多个 wav/mp3 路径出发，自动做：
+    - **训练一致的加载**：按 `target_sr/mono` 读入（同时保留 `sr0` 便于排查输入混乱）
+    - **训练一致的切窗与特征**：固定窗 → log-mel → pad/crop
+    - **批量打包**：输出 BCHW batch（numpy）
+  - `max_slices_per_file` 用于 demo/可视化加速（每条音频最多取 N 个窗口），不想抽样就传 `None`。
+  - 典型用法（infer）：`audio_recs, slices, batch = files_to_slices_and_batch(audio_files, target_frames=84)`。
+
+## prepare_pipeline.py
+- `load_and_split_meta(meta_files: Iterable[str | Path], *, label_map: dict[str,str], target_labels: list[str] | None = None, include_sources: list[str] | None = None, dedup_subset: list[str] | None = None) -> (meta_df, working_df, holdout_df)`
+  - prepare 的“meta 入口”API：读取多源 meta → 映射 canonical_label → 去重 → 按 source 切分工作集/holdout（比如 freesound 作为未来检测集）。
+- `filter_and_sample_gunshot(working_df: pd.DataFrame, *, max_duration_sec: float, gunshot_total: int, seed: int, target_label: str = "gunshot", ...) -> (clean_df, debug_info)`
+  - prepare 的“过滤+枪声均匀抽样”API：先过滤超长音频，再按 weapon 均匀抽枪声到指定总量；返回 clean_df 和用于打印的 debug summary。
+- `cache_windows_to_mel_index(windows_df: pd.DataFrame, cache_dir: Path, index_csv: Path, *, target_sr: int = SR, target_frames: int = MEL_TARGET_FRAMES, center: bool = MEL_CENTER, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, target_labels: list[str] | None = None, label_to_id: dict[str,int] | None = None, background_label: str = BACKGROUND_LABEL, save_float32: bool = True) -> pd.DataFrame`
+  - prepare 的“最后一步”API：把 `all_windows_df`（窗口级表，可能包含 `audio` 波形）缓存成 mel `.npy`，并落盘训练索引 `window_index.csv`。
+  - 关键点：
+    - **训练/推理一致性**：mel 参数默认来自 `src.config`（含 `MEL_CENTER/MEL_TARGET_FRAMES`），避免 notebook 里 hardcode。
+    - **多标签兼容**：`labels/label_ids` 只包含目标类（如 glass/gunshot），background 用空列表 `[]`（对应 BCE 多热全 0）。
+    - **I/O 优先级**：优先用行内 `audio`（避免重复切窗/加载），否则回退到 `load_audio(row)`。
+  - 典型用法：`index_df = cache_windows_to_mel_index(all_windows_df, CACHE_MEL64, PROJECT_ROOT/'cache/window_index.csv')`。
 
 ## case_study_cli.py
 - `_load_config(path: Path | None) -> dict[str, Any]`

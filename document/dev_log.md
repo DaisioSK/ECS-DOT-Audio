@@ -817,3 +817,54 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - NPZ 导出支持按 fold/label_ids 分层抽样（保证 calib 更稳），并把抽样策略写入 `tiny-audio-net-calib.json` 里版本化。
 - 后续接 PTQ 工具链时，明确它要求的是 `labels` 还是 `y`，避免再发生“背景全变 0 类”的误用。 
 
+## 2025-12-23 11:47:44 +08 Session (Sprint #3, Capstone 多标签玻璃+枪声 — 数据管线清洁化&推理对齐)
+
+### TL;DR
+- 统一配置与路径：SR=21333、MEL_CENTER=False，META_FILES/RAW_AUDIO_ROOTS 多源；per-label WINDOW_PARAMS（玻璃/枪声/背景）。
+- 增强均衡：枪声按 weapon 轮询+放回补齐，glass 覆盖+兜底；新增增广后 weapon×fold pivot。
+- 训练稳态：train 日志含 train_acc/train_f1/lr；末段候选选优（select_last_ratio+train_loss_tolerance），top-k checkpoint；多标签/无 bias 兼容。
+- 推理/导出：export 随机 window 逆 mel 试听+JPG，BCHW 导出；prepare_clean 增 mel 可视化导出。
+
+### 项目状态（宏观→微观）
+- 宏观：Capstone Sprint #3 收尾，重点“数据管线标准化 + 推理对齐 + 增强均衡”。多标签玻璃/枪声链路可跑，推理/导出与训练配置对齐。
+- 配置：`src/config.py` 统一 META_FILES/RAW_AUDIO_ROOTS，SR=21333，MEL_CENTER=False，WINDOW_PARAMS 分标签；TARGET_LABELS=glass, gunshot。
+- 数据/窗口：`data_utils` 路径解析优先 filepath/raw_filepath；静音裁剪、能量掩码、late_peak_keep_ratio；定长帧 pad/crop。新增 `prepare_pipeline.py`、`preprocess.py` 将重采样→切窗→缓存 API 化。
+- 增强：枪声“增强在外、武器在内”轮询，池耗尽放回采样；glass 覆盖+兜底；背景逻辑独立。新增增广后 weapon×fold 的 count/ratio 检查。
+- 训练：TinyGlassNet 支持可变 NUM_CLASSES、无 bias classifier；`training.py` 增 train_acc/train_f1/lr 日志，末段候选+train_loss 约束选 top-k。
+- 推理/导出：export.ipynb 随机抽 glass/gunshot mel→BCHW→逆 mel 试听（Griffin-Lim，归一化）并存 mel JPG；prepare_clean 增 mel 批量可视化。
+
+### 本次完成
+1) 配置/路径集中：SR=21333、MEL_CENTER=False，多源 META/RAW_AUDIO；per-label 窗口阈值/偏移。  
+2) 工具链强化：路径解析健壮（filepath/raw_filepath 优先），窗口生成支持静音裁剪/能量掩码/late_peak_keep_ratio，定长帧 pad。  
+3) 增强均衡：枪声按 weapon 均匀轮询，池耗尽放回；glass 覆盖+兜底；新增增广后 weapon×fold pivot 校验。  
+4) 训练稳态：日志含 train_acc/train_f1/lr；末段候选 (select_last_ratio, train_loss_tolerance) + top-k；兼容多标签/无 bias classifier。  
+5) 推理/导出：随机 window 逆 mel 试听 + mel JPG + BCHW 导出，修复 colorbar 报错；prepare_clean 添加 mel 可视化导出。  
+
+### 开发思路与关键改动
+- 痛点：配置分散、推理未复用重采样；枪声增强不均衡；导出缺试听/可视；训练选优单一。  
+- 方案：集中 config，API 化 prepare 流程；枪声按 weapon 轮询+放回保证均衡；export 逆 mel+JPG；训练记录 train 指标并末段 top-k 选优。  
+- 关键改动：  
+  - `config.py`：多源 META/RAW_AUDIO，SR=21333，MEL_CENTER=False，WINDOW_PARAMS 分标签。  
+  - `data_utils.py`：静音裁剪、能量掩码、late_peak_keep_ratio，定长帧 pad；路径解析优先 filepath/raw_filepath。  
+  - 新增 `prepare_pipeline.py`、`preprocess.py`：重采样/切窗/缓存 API 化。  
+  - 增强：枪声“增强在外、武器在内”轮询放回；glass 覆盖+兜底；增广后 weapon×fold pivot。  
+  - `training.py`：train_acc/train_f1/lr 日志；select_last_ratio+train_loss_tolerance 末段候选；top-k；多标签/无 bias 兼容。  
+  - export：随机 window 逆 mel 试听（db_to_power+Griffin-Lim，归一化），保存 mel JPG、BCHW。  
+
+### Insight / 巧思
+- 增强均衡：增强在外、武器在内的轮询；池耗尽放回，保证目标数量与武器覆盖。  
+- 逆 mel 试听：db_to_power → Griffin-Lim → 归一化，确保能播；同时输出 mel JPG 供肉眼校验。  
+- 训练选优：末段窗口 + train_loss 约束，减少偶然波动；日志加 train_acc/train_f1/lr 便于识别过拟合/学习率问题。  
+- API 化：prepare 流程拆到 preprocess/prepare_pipeline，infer/export 可直接复用。  
+
+### 示例 / 测试
+- 增广后 weapon×fold pivot：计数/比例检查枪声增强均衡性。  
+- 导出试听：export 随机抽 glass/gunshot mel，生成 BCHW + mel JPG + 音频播放。  
+- 训练日志：每 epoch 打印 train/val loss/acc/f1 + lr，末段自动选 top-k。  
+
+### TODO / Improvements
+- 推理完全对齐：infer 直接调用 preprocess/prepare_pipeline API，统一重采样/切窗/帧长。  
+- 增强计划再调优：根据最新数据量调整枪声/玻璃的 pipeline 组合与份额，观察 val 指标与实测误报。  
+- Mel 形状收敛：若部署需固定帧长，缓存阶段可启用 MEL_TARGET_FRAMES，并在 infer/export 中保持一致。  
+- 训练选优：可尝试基于最近若干 epoch 的综合评分（val_f1+train_loss）或校准集度量。  
+- 测试/CI：补最小单测（路径解析、窗口生成、增强均衡、训练 top-k 选优），确保后续重构安全。  
