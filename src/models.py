@@ -27,7 +27,8 @@ class TinyGlassNet(nn.Module):
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(c2, c3, kernel_size=3, padding=1, bias=False),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d((1, 1)),
+            # nn.AdaptiveAvgPool2d((1, 1)),
+            nn.AvgPool2d(kernel_size=(16, 20)),
         )
         self.classifier = nn.Linear(c3, num_classes, bias=False)
 
