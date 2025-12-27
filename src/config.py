@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
+from typing import Dict, Sequence
 
 def locate_project_root(start: Path | None = None, marker: str = "data") -> Path:
     """Walk up directories until a marker folder is found."""
@@ -80,6 +80,32 @@ ID_TO_LABEL = {idx: label for label, idx in LABEL_TO_ID.items()}
 NUM_CLASSES = len(TARGET_LABELS)
 BACKGROUND_LABEL = "background"
 BACKGROUND_MULTIPLIER = 3
+
+# Device simulation plans (for round-robin / stats)
+DEVICE_PLANS = [
+    "none",            # no device perturbation
+    "eq",              # tilt shelf
+    "band",            # bandlimit (low/high/band-pass)
+    "rir",             # synthetic room IR
+    "codec",           # codec-like resample
+    "compress",        # soft compression
+    "codec_compress",  # codec + compression combo
+]
+
+PIPELINE_REGISTRY: Dict[str, Sequence[str]] = {
+    "stretch_gain_shift": ("time_stretch", "gain", "time_shift"),
+    "reverb_gain_shift": ("reverb", "gain", "time_shift"),
+    "mix_gain_shift": ("mix", "gain", "time_shift"),
+    "filter_gain_shift": ("filter", "gain", "time_shift"),
+    "mix_filter_gain_shift": ("mix", "filter", "gain", "time_shift"),
+    "stretch_mix_gain_shift": ("time_stretch", "mix", "gain", "time_shift"),
+    "stretch_filter_gain_shift": ("time_stretch", "filter", "gain", "time_shift"),
+    "reverb_mix_gain_shift": ("reverb", "mix", "gain", "time_shift"),
+    "reverb_filter_gain_shift": ("reverb", "filter", "gain", "time_shift"),
+    "stretch_mix_filter_gain_shift": ("time_stretch", "mix", "filter", "gain", "time_shift"),
+    "reverb_mix_filter_gain_shift": ("reverb", "mix", "filter", "gain", "time_shift"),
+}
+
 # Mapping from dataset categories to canonical labels.
 POSITIVE_LABELS = {
     "glass_breaking": "glass",

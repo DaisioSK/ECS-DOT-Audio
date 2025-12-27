@@ -11,19 +11,46 @@ from scipy import signal
 from .config import SR
 
 
-def augment_time_shift(y: np.ndarray, sr: int = SR, max_shift: float = 0.15) -> np.ndarray:
-    """Shift waveform within +/- max_shift seconds without wrapping the peak outside the window."""
+def _sample_normal_with_clip(mu: float, sigma: float, clip_range: Tuple[float, float]) -> float:
+    """Sample from N(mu, sigma) then clip to clip_range."""
+    val = np.random.normal(mu, sigma)
+    return float(np.clip(val, clip_range[0], clip_range[1]))
+
+
+def augment_time_shift(
+    y: np.ndarray,
+    sr: int = SR,
+    max_shift: float = 0.06,
+    sigma: float = 0.02,
+    zero_prob: float = 0.5,
+) -> np.ndarray:
+    """
+    Shift waveform within +/- max_shift seconds.
+
+    - shift_seconds ~ N(0, sigma) clipped to [-max_shift, max_shift]
+    - with probability zero_prob, shift is forced to 0 (保留一部分原位)
+    - still防止将峰值移出窗口
+    """
     length = len(y)
     if length == 0:
         return y
+
+    if random.random() < zero_prob:
+        return y
+
     peak_idx = int(np.argmax(np.abs(y)))
-    shift_samples = int(random.uniform(-max_shift, max_shift) * sr)
+    shift_seconds = _sample_normal_with_clip(0.0, sigma, (-max_shift, max_shift))
+    shift_samples = int(shift_seconds * sr)
+
+    # 保证高能峰不过界
     margin = max(1, int(0.1 * length))
     max_left = peak_idx - margin
     max_right = length - margin - peak_idx
     shift_samples = max(-max_left, min(shift_samples, max_right))
+
     if shift_samples == 0:
         return y
+
     shifted = np.zeros_like(y)
     if shift_samples > 0:
         shifted[shift_samples:] = y[:-shift_samples]
@@ -41,9 +68,22 @@ def augment_time_stretch(y: np.ndarray, rate_range: Tuple[float, float] = (0.95,
     return np.pad(stretched, (0, len(y) - len(stretched)))
 
 
-def augment_gain(y: np.ndarray, db_range: Tuple[float, float] = (-5.0, 5.0)) -> np.ndarray:
-    """Apply random gain (dB) to simulate different loudness levels."""
-    gain_db = random.uniform(*db_range)
+def augment_gain(
+    y: np.ndarray,
+    db_range: Tuple[float, float] = (-4.0, 4.0),
+    sigma_db: float = 2.0,
+    zero_prob: float = 0.3,
+) -> np.ndarray:
+    """
+    Apply random gain (dB).
+
+    - gain_db ~ N(0, sigma_db) clipped to db_range
+    - with probability zero_prob, gain_db=0
+    """
+    if random.random() < zero_prob:
+        gain_db = 0.0
+    else:
+        gain_db = _sample_normal_with_clip(0.0, sigma_db, db_range)
     gain = librosa.db_to_amplitude(gain_db)
     return y * gain
 

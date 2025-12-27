@@ -235,23 +235,27 @@
   - 按固定窗长/步长切 waveform，返回 `(seg, start_sec)`；`pad_short=True` 时短音频会 zero-pad 到至少 1 个窗。
 - `log_mel(y: np.ndarray, sr: int, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = True) -> np.ndarray`
   - 计算 log-mel（dB）：返回 `(n_mels, frames)`；`center=True` 时会导致 frames 增加（例如 1s@22050 + hop=256 → 87 帧），用于对齐训练/推理。
+- `normalize_wave(y: np.ndarray, mode: str = "absmax", target_rms: float = 0.1, eps: float = 1e-8) -> np.ndarray`
+  - 可选波形归一化：`absmax` 模式按峰值缩放，`rms` 模式缩放到指定 RMS；训练默认不启用，推理可按需开启。
 - `pad_or_crop_frames(mel: np.ndarray, target_frames: int, mode: str = "constant") -> np.ndarray`
   - 将 mel 的 time 轴裁剪/补零到固定帧数（例如 84/87），用于部署侧固定输入 shape。
 - `mel_to_bchw(mel: np.ndarray) -> np.ndarray`
   - `(n_mels, frames) -> (1, 1, n_mels, frames)`，并转为 `float32`；常用于 ONNX 单样本推理输入打包。
-- `slice_audio_to_mels(record: AudioRecord, *, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, target_frames: int = MEL_TARGET_FRAMES, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = MEL_CENTER, pad_short: bool = True) -> list[WindowSlice]`
+- `slice_audio_to_mels(record: AudioRecord, *, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, target_frames: int = MEL_TARGET_FRAMES, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = MEL_CENTER, pad_short: bool = True, normalize: bool = False, norm_mode: str = "absmax", norm_target_rms: float = 0.1, norm_gain_db: float | None = None) -> list[WindowSlice]`
   - 单文件入口：`AudioRecord` → 固定窗切片 → 每窗 log-mel → pad/crop 到固定帧数，输出一组 `WindowSlice`。
+  - 可选归一化/增益：`normalize=True` 时按 `norm_mode`（absmax/rms）缩放，`norm_gain_db` 额外线性放大，默认关闭以保持训练兼容。
   - 使用场景：infer/export 想对“某一条长音频”做滑窗推理时，先用它统一生成窗口特征。
   - 典型用法：`slices = slice_audio_to_mels(load_audio_file(p), target_frames=84)`。
 - `slices_to_batch(slices: Sequence[WindowSlice], *, dtype: np.dtype = np.float32) -> np.ndarray`
   - 将一组 `WindowSlice.mel` 打包成 CNN 需要的 batch：返回 `(B, 1, n_mels, frames)`（也就是 BCHW）。
   - 这个 batch 是 numpy（方便 ONNX/导出）；在 torch 推理时通常再包一层：`torch.from_numpy(batch).float()`。
-- `files_to_slices_and_batch(paths: Sequence[Path | str], *, target_sr: int = SR, mono: bool = True, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, target_frames: int = MEL_TARGET_FRAMES, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = MEL_CENTER, pad_short: bool = True, max_files: int | None = None, max_slices_per_file: int | None = None, seed: int = 42) -> (list[AudioRecord], list[WindowSlice], np.ndarray)`
+- `files_to_slices_and_batch(paths: Sequence[Path | str], *, target_sr: int = SR, mono: bool = True, window_seconds: float = WINDOW_SECONDS, hop_seconds: float = WINDOW_HOP, target_frames: int = MEL_TARGET_FRAMES, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_mels: int = N_MELS, center: bool = MEL_CENTER, pad_short: bool = True, max_files: int | None = None, max_slices_per_file: int | None = None, seed: int = 42, normalize: bool = False, norm_mode: str = "absmax", norm_target_rms: float = 0.1, norm_gain_db: float | None = None) -> (list[AudioRecord], list[WindowSlice], np.ndarray)`
   - 多文件“一键入口”：从多个 wav/mp3 路径出发，自动做：
     - **训练一致的加载**：按 `target_sr/mono` 读入（同时保留 `sr0` 便于排查输入混乱）
     - **训练一致的切窗与特征**：固定窗 → log-mel → pad/crop
     - **批量打包**：输出 BCHW batch（numpy）
   - `max_slices_per_file` 用于 demo/可视化加速（每条音频最多取 N 个窗口），不想抽样就传 `None`。
+  - 可选归一化/增益：推理端如需抵抗录音音量差，可传 `normalize=True, norm_mode="rms", norm_target_rms=0.1, norm_gain_db=10.0`。
   - 典型用法（infer）：`audio_recs, slices, batch = files_to_slices_and_batch(audio_files, target_frames=84)`。
 
 ## prepare_pipeline.py

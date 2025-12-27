@@ -123,6 +123,35 @@ def log_mel(
     return librosa.power_to_db(mel, ref=np.max)
 
 
+def normalize_wave(
+    y: np.ndarray,
+    *,
+    mode: str = "absmax",
+    target_rms: float = 0.1,
+    eps: float = 1e-8,
+) -> np.ndarray:
+    """Normalize a waveform before feature extraction.
+
+    Args:
+        mode: ``"absmax"`` -> divide by max(|y|); ``"rms"`` -> scale to ``target_rms``.
+        target_rms: RMS to match when ``mode="rms"``.
+        eps: small value to avoid division by zero.
+    """
+    if y.size == 0:
+        return y
+    if mode == "absmax":
+        m = float(np.max(np.abs(y)))
+        if m < eps:
+            return y
+        return y / m
+    if mode == "rms":
+        rms = float(np.sqrt(np.mean(y ** 2)))
+        if rms < eps:
+            return y
+        return y * (target_rms / rms)
+    raise ValueError(f"Unsupported normalize mode: {mode}")
+
+
 def pad_or_crop_frames(
     mel: np.ndarray,
     target_frames: int,
@@ -160,6 +189,10 @@ def slice_audio_to_mels(
     n_mels: int = N_MELS,
     center: bool = MEL_CENTER,
     pad_short: bool = True,
+    normalize: bool = False,
+    norm_mode: str = "absmax",
+    norm_target_rms: float = 0.1,
+    norm_gain_db: float | None = None,
 ) -> List[WindowSlice]:
     """Convert one audio file into training-consistent window slices.
 
@@ -179,8 +212,12 @@ def slice_audio_to_mels(
         hop_seconds=hop_seconds,
         pad_short=pad_short,
     ):
+        seg_proc = normalize_wave(seg, mode=norm_mode, target_rms=norm_target_rms) if normalize else seg
+        if norm_gain_db is not None:
+            seg_proc = seg_proc * float(10 ** (norm_gain_db / 20))
+
         mel = log_mel(
-            seg,
+            seg_proc,
             sr=record.sr,
             n_fft=n_fft,
             hop_length=hop_length,
@@ -194,7 +231,7 @@ def slice_audio_to_mels(
                 path=record.path,
                 start_sec=float(start_s),
                 duration_sec=float(len(seg) / record.sr),
-                wave=seg,
+                wave=seg_proc,
                 mel=mel,
             )
         )
@@ -231,6 +268,10 @@ def files_to_slices_and_batch(
     max_files: int | None = None,
     max_slices_per_file: int | None = None,
     seed: int = 42,
+    normalize: bool = False,
+    norm_mode: str = "absmax",
+    norm_target_rms: float = 0.1,
+    norm_gain_db: float | None = None,
 ) -> tuple[List[AudioRecord], List[WindowSlice], np.ndarray]:
     """Load multiple files, slice into mels, and pack into a single batch.
 
@@ -261,6 +302,10 @@ def files_to_slices_and_batch(
             n_mels=n_mels,
             center=center,
             pad_short=pad_short,
+            normalize=normalize,
+            norm_mode=norm_mode,
+            norm_target_rms=norm_target_rms,
+            norm_gain_db=norm_gain_db,
         )
         if max_slices_per_file is not None and len(slices) > max_slices_per_file:
             idx = sorted(rng.choice(len(slices), size=max_slices_per_file, replace=False))
@@ -282,4 +327,5 @@ __all__ = [
     "slice_audio_to_mels",
     "slices_to_batch",
     "files_to_slices_and_batch",
+    "normalize_wave",
 ]

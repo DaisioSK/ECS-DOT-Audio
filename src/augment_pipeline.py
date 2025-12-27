@@ -7,6 +7,7 @@ from typing import Dict, Sequence
 
 import numpy as np
 
+from .config import PIPELINE_REGISTRY
 from .augment import (
     augment_gain,
     augment_time_shift,
@@ -25,20 +26,6 @@ from .augment import (
 #     "gain_mix": ("gain", "mix"),
 #     "stretch_filter": ("time_stretch", "filter"),
 # }
-
-PIPELINE_REGISTRY: Dict[str, Sequence[str]] = {
-    "stretch_gain": ("time_stretch", "gain"),
-    "reverb_gain": ("reverb", "gain"),
-    "mix_gain": ("mix", "gain"),
-    "filter_gain": ("filter", "gain"),
-    "mix_filter_gain": ("mix", "filter", "gain"),
-    "stretch_mix_gain": ("time_stretch", "mix", "gain"),
-    "stretch_filter_gain": ("time_stretch", "filter", "gain"),
-    "reverb_mix_gain": ("reverb", "mix", "gain"),
-    "reverb_filter_gain": ("reverb", "filter", "gain"),
-    "stretch_mix_filter_gain": ("time_stretch", "mix", "filter", "gain"),
-    "reverb_mix_filter_gain": ("reverb", "mix", "filter", "gain"),
-}
 
 @dataclass
 class AugmentedWindow:

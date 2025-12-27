@@ -868,3 +868,60 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - Mel 形状收敛：若部署需固定帧长，缓存阶段可启用 MEL_TARGET_FRAMES，并在 infer/export 中保持一致。  
 - 训练选优：可尝试基于最近若干 epoch 的综合评分（val_f1+train_loss）或校准集度量。  
 - 测试/CI：补最小单测（路径解析、窗口生成、增强均衡、训练 top-k 选优），确保后续重构安全。  
+
+
+## 2025-12-27 17:54:00 +08 Session (Device sim & preprocess refactor)
+
+### 大图位置
+- **Sprint**：Capstone Sprint #3（事件检测 & 部署韧性）。 
+- **Task**：Task-Prep-Device（设备域增广）、Task-API-Preprocess（推理/准备一致化）、Task-Infer-Debug（音频 vs 录制对齐）。
+
+### TL;DR
+- 引入设备链路扰动模块（EQ/带通/RIR/编解码/压缩组合），事件增广与设备增广组合，支持 QA 试听快速感知失真。
+- 预处理管线抽象出统一配置（sr/window/hop/mel/center/normalize），为 prepare/infer 复用打底（尚未全面启用，保持兼容）。
+- infer/compare notebook 增加自定义 mel npy 路径推理、增益/平移对比、全面打印 batch 统计，用于排查“播放→录制”漂移。
+
+### 项目状态（宏观→微观）
+- **宏观**：数据准备与训练稳定，多标签/多源链路保持；开始补设备域鲁棒性与推理对齐。
+- **增广**：事件增广（mix/filter/stretch/reverb/gain/shift）与设备扰动（eq/band/rir/codec/compress）可组合；监听单元可试听 base / device-only / device+event。
+- **预处理**：`PreprocessConfig` 与底层处理函数已落地，接口暂保持兼容，便于后续将 prepare/infer 统一。
+- **推理对齐**：infer/compare 支持从音频或 mel npy 推理，打印 batch/logits/probs、RMS/absmax，对录制样本进行对比诊断。
+
+### 本次完成
+1. **设备域增广**：新增 `src/augment_device.py`，`config.DEVICE_PLANS` 注册 eq/band/rir/codec/compress/codec_compress/none，事件管线里可叠加 device+event；QA 试听展示 base→device→device+event。
+2. **事件增广收紧**：`PIPELINE_REGISTRY` 改为固定含 gain+time_shift 的组合（如 stretch_gain_shift），后续可按正态微扰收紧幅度；避免多重叠加过度失真。
+3. **预处理抽象**：`PreprocessConfig`（sr/mono/window/hop/frames/n_fft/hop_length/n_mels/center/normalize），底层处理函数收敛；`cache_windows_to_mel_index`、`files_to_slices_and_batch` 已预留 cfg 入口（未强制启用，兼容旧参数）。
+4. **推理/对比工具**：infer 支持 custom mel npy 直接推理并合并可视化；compare notebook 增加增益/平移版本对比、mel/full打印、batch 统计（logits/probs范围、RMS/absmax），用于诊断录制与原声差异。
+5. **文档接口**：`document/module_interfaces.md` 同步新增模块接口与参数说明。
+
+### 开发思路与关键改动
+- **思路**：设备差异视为“声学链路随机化”问题，先用增广覆盖设备频响/压缩/房间，再保持特征管线一致；推理端用同一预处理 + 归一策略，减少分布漂移。
+- **关键实现**：
+  - `augment_device.py`：封装 device pipeline，支持与事件管线组合；QA 试听打印 absmax/长度便于筛选过度失真样本。
+  - `config.py`：集中 DEVICE_PLANS、PIPELINE_REGISTRY（含 time_shift/gain 常驻），便于后续调参/收紧幅度。
+  - `preprocess.py`：定义 `PreprocessConfig` 与底层 slice/mel 处理；上层 prepare/infer 仅需传 cfg 保持一致。
+  - infer/compare：支持自定义 mel npy、轴转置/跳过检查；打印 batch/logits/probs、RMS/absmax，便于发现“录制后概率全零”等问题。
+
+### Insight / 巧思
+- QA 试听在 device-only 与 device+event 两档输出，可快速判定哪些组合“人耳已不可用”，用于收紧幅度或过滤。
+- 将 time_shift/gain 设为常驻轻微扰动，叠加设备扰动，降低模型对绝对对齐与音量的依赖。
+- 预处理 cfg 分离，先兼容旧调用再平滑迁移，可避免一次性大改带来的 notebook 破坏。
+
+### 使用示例 / 测试
+- 设备+事件 QA：在 prepare_clean 增强后运行试听单元，打印 `absmax`/时长并播放，筛掉过度失真的组合。
+- 自定义 mel 推理：在 infer 中放置 `data/custom/mel/*.npy`，自动转置/跳过不合规 shape，打印 logits/probs/RMS。
+- compare：对同一音频的原始 vs 录制/增益/平移版本，打印 mel、RMS/absmax、概率，对齐 batch 统计以诊断漂移。
+
+### TODO / Improvements（继承）
+- 收紧设备扰动幅度（特别是 RIR 回声过重）并引入增广过滤（相似度/能量阈值）。
+- 统一预处理入口：在 prepare/infer 全面启用 `PreprocessConfig`，删掉重复参数，确保特征管线一致。
+- 增强幅度正态微扰：对 gain/time_shift 采用窄分布、30% 置零；事件/设备参数范围整体收紧。
+- 训练侧观察：引入设备增广后重新跑 k-fold，验证 gunshot/录制样本概率是否改善；视结果调整阈值/权重。
+- 文档/接口：完成 `src/__init__.py` 恢复或补导出，清理临时文件/Trash；补充 device 增广示例到 module interfaces。
+
+### 开发日志
+- 新增 `src/augment_device.py` 与 DEVICE_PLANS；PIPELINE_REGISTRY 调整为 *_gain_shift 组合。
+- `preprocess.py` 增加 `PreprocessConfig` 与统一处理函数；`cache_windows_to_mel_index`/`files_to_slices_and_batch` 预留 cfg 入口。
+- infer/compare 增强：支持 custom mel npy 推理、增益/平移对比、batch/logits/probs/RMS 打印；加入 mel 轴转置/跳过提示。
+- 文档 `module_interfaces.md` 更新接口说明；多个临时 mel npy / compare notebook 用于诊断录制漂移。
+
