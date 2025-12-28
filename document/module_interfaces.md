@@ -7,6 +7,7 @@
 - 常量：`PROJECT_ROOT`, `DATA_ROOT`, `CACHE_DIR`, `SR`, `N_MELS`, `N_FFT`, `HOP_LENGTH`, `WINDOW_SECONDS`, `WINDOW_HOP`, `TARGET_LABELS`, `LABEL_TO_ID`, `NUM_CLASSES`, `BACKGROUND_LABEL`, `CASE_STUDY_*` 等。
   - 统一的路径、标签空间、采样率和窗口参数，Notebook 与脚本都会读这些默认值。
 - 数据与缓存：`META_FILES`（多源 meta 列表）、`RAW_AUDIO_ROOTS`（源到原始音频根的映射，兼容缺失 filepath 场景）、`CACHE_ROOT`/`CACHE_MEL64`（缓存根及默认 mel64 路径），`AUDIO_DIR`/`META_FILE` 作为 legacy 兼容。
+- 设备扰动与增强：`DEVICE_PLANS`（none/eq/band/rir/codec/compress/codec_compress 的设备链路扰动列表），`PIPELINE_REGISTRY`（以 gain+time_shift 为底的事件增强组合，如 `stretch_gain_shift`、`reverb_filter_gain_shift`、`mix_filter_gain_shift` 等）。
 
 ## audio_qc.py
 - `mel_db_to_waveform(mel_db: np.ndarray, sr: int = SR, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH, n_iter: int = 32) -> np.ndarray`
@@ -29,6 +30,20 @@
   - 简单多 tap 回声，模拟房间混响。
 - `apply_simple_filter(y: np.ndarray, cutoff: float = 4000.0, sr: int = SR, kind: str = 'lowpass') -> np.ndarray`
   - 4 阶巴特沃斯低/高通，调节频带。
+
+## augment_device.py
+- `random_eq_tilt(y: np.ndarray, sr: int = SR, gain_db_range=(-6, 6)) -> np.ndarray`
+  - 上扬或下压高频（tilt shelf），模拟设备频响倾斜。
+- `random_band_filter(y: np.ndarray, sr: int = SR, low_hz=80, high_hz=8000) -> np.ndarray`
+  - 随机带限（低切/高切/带通），模拟不同播放/录音带宽。
+- `apply_simple_rir(y: np.ndarray, sr: int = SR, decay=0.25, max_delay_ms=60) -> np.ndarray`
+  - 简化版房间脉冲响应卷积，加入适度混响。
+- `codec_like_resample(y: np.ndarray, sr: int = SR, target_sr: int | None = 8000) -> np.ndarray`
+  - 低码率/窄带重采样再上采，模拟编解码损伤。
+- `soft_compress(y: np.ndarray, threshold=0.8, ratio=4.0) -> np.ndarray`
+  - 轻量压缩/限幅，缓和峰值。
+- 常量：`DEVICE_PIPELINE`（设备扰动组合表），`run_device_pipeline(y, name, sr=SR) -> np.ndarray`
+  - 按名称执行设备链路扰动（none/eq/band/rir/codec/compress/codec_compress），用于“播放+录音”仿真。
 
 ## meta_utils.py
 - `load_meta_files(meta_files: Sequence[str | Path]) -> DataFrame`

@@ -8,15 +8,11 @@ import torch.nn as nn
 
 from .config import NUM_CLASSES
 
-
 class TinyGlassNet(nn.Module):
     """Compact CNN with only Conv/Pool/ReLU/FC blocks."""
-
-    def __init__(self, in_channels: int = 1, base_channels: int = 16, num_classes: int = NUM_CLASSES):
+    def __init__(self, in_channels: int = 1, base_channels: int = 24, num_classes: int = 2, dropout_p: float = 0.2):
         super().__init__()
-        c1 = base_channels
-        c2 = base_channels * 2
-        c3 = base_channels * 4
+        c1, c2, c3 = base_channels, base_channels * 2, base_channels * 4
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, c1, kernel_size=3, padding=1, bias=False),
             nn.ReLU(inplace=True),
@@ -28,15 +24,17 @@ class TinyGlassNet(nn.Module):
             nn.Conv2d(c2, c3, kernel_size=3, padding=1, bias=False),
             nn.ReLU(inplace=True),
             # nn.AdaptiveAvgPool2d((1, 1)),
-            nn.AvgPool2d(kernel_size=(16, 20)),
+            nn.AvgPool2d(kernel_size=(16, 20)),  # 64x80 -> 1x1
         )
+        self.dropout = nn.Dropout(p=dropout_p)
         self.classifier = nn.Linear(c3, num_classes, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
         x = x.flatten(1)
+        x = self.dropout(x)
         return self.classifier(x)
-
+        
 
 def count_parameters(model: nn.Module) -> int:
     """Return trainable parameter count."""
