@@ -28,6 +28,7 @@
 ├── tools/                         # 实用脚本集合
 │   ├── convert_to_wav.py          # 通用音频转 WAV 的 CLI，递归扫描多格式，支持可选重采样与下混，保持目录结构
 │   └── resample_audio.py          # 批量重采样到 22.05k mono 并写入新 meta 的脚本，便于离线预处理/去除依赖
+├── data/meta/build_meta.py        # 通用 meta 生成脚本，可指定任意目录/输出/source/label（默认按文件夹名）
 └── src/                           # 核心库代码（Notebook 与 CLI 共享）
     ├── __init__.py                # 包初始化
     ├── config.py                  # 全局路径/标签空间/采样率/mel 参数与 case study 默认配置

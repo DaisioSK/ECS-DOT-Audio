@@ -110,21 +110,52 @@ def mix_with_background(y: np.ndarray,
 
 
 def apply_simple_reverb(y: np.ndarray, decay: float = 0.3, delay_ms: int = 50) -> np.ndarray:
-    """Add a basic multi-tap echo tail to mimic room reverb."""
+    """Add a short, randomized multi-tap echo to mimic room reverb."""
+    # Randomize decay/delay with safe bounds to avoid over-blurring.
+    delay_ms = int(np.clip(delay_ms, 20, 70))  # clamp default in case caller overrides
+    delay_ms = random.uniform(20.0, 70.0)
+    decay = random.uniform(0.2, 0.5)
+    taps = 4
     delay_samples = int(delay_ms * 1e-3 * SR)
-    impulse = np.zeros(delay_samples * 4)
-    for i in range(4):
+    if delay_samples <= 0:
+        return y
+    impulse = np.zeros(delay_samples * taps)
+    for i in range(taps):
         impulse[i * delay_samples] = decay ** i
     reverbed = signal.fftconvolve(y, impulse)[:len(y)]
-    return reverbed
+    # Keep wet mix modest to avoid drowning transients.
+    wet_mix = random.uniform(0.25, 0.35)
+    return ((1.0 - wet_mix) * y + wet_mix * reverbed).astype(np.float32, copy=False)
 
 
 def apply_simple_filter(y: np.ndarray, cutoff: float = 4000.0, sr: int = SR, kind: str = 'lowpass') -> np.ndarray:
-    """Apply a 4th-order Butterworth low/high-pass filter."""
+    """Apply a randomized 4th-order Butterworth filter (low/high/band-pass)."""
     nyq = 0.5 * sr
-    norm_cutoff = cutoff / nyq
-    b, a = signal.butter(4, norm_cutoff, btype='low' if kind == 'lowpass' else 'high')
-    return signal.lfilter(b, a, y)
+
+    # When kind is not explicitly low/high, choose a mode with safer randomized cutoffs.
+    mode = kind
+    if kind not in ('lowpass', 'highpass'):
+        mode = random.choice(['lowpass', 'highpass', 'bandpass'])
+
+    if mode == 'lowpass':
+        cutoff = random.uniform(2500.0, 8000.0)
+        norm = cutoff / nyq
+        b, a = signal.butter(4, norm, btype='low')
+    elif mode == 'highpass':
+        cutoff = random.uniform(150.0, 800.0)
+        norm = cutoff / nyq
+        b, a = signal.butter(4, norm, btype='high')
+    else:  # bandpass
+        low = random.uniform(150.0, 800.0)
+        high = random.uniform(2500.0, 6500.0)
+        # enforce a minimum bandwidth and valid ordering
+        if high - low < 800.0:
+            high = low + 800.0
+        high = min(high, nyq * 0.95)
+        low = max(low, 60.0)
+        b, a = signal.butter(4, [low / nyq, high / nyq], btype='band')
+
+    return signal.lfilter(b, a, y).astype(np.float32, copy=False)
 
 
 __all__ = [

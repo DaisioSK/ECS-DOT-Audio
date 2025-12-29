@@ -919,9 +919,44 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 训练侧观察：引入设备增广后重新跑 k-fold，验证 gunshot/录制样本概率是否改善；视结果调整阈值/权重。
 - 文档/接口：完成 `src/__init__.py` 恢复或补导出，清理临时文件/Trash；补充 device 增广示例到 module interfaces。
 
-### 开发日志
-- 新增 `src/augment_device.py` 与 DEVICE_PLANS；PIPELINE_REGISTRY 调整为 *_gain_shift 组合。
-- `preprocess.py` 增加 `PreprocessConfig` 与统一处理函数；`cache_windows_to_mel_index`/`files_to_slices_and_batch` 预留 cfg 入口。
-- infer/compare 增强：支持 custom mel npy 推理、增益/平移对比、batch/logits/probs/RMS 打印；加入 mel 轴转置/跳过提示。
-- 文档 `module_interfaces.md` 更新接口说明；多个临时 mel npy / compare notebook 用于诊断录制漂移。
 
+## 2025-12-29 11:59:36 +0800 Session (Meta tooling & augmentation refresh)
+
+### TL;DR
+- 新增通用 meta 生成脚本 `data/meta/build_meta.py`，扫描任意目录，label 取文件名首个下划线前缀，默认 output/source 用目录名。
+- 增强随机性优化：reverb/filter 随机化且限幅，pipeline 无需改动即受益。
+- 梳理 `prepare_clean.ipynb` 流程，确认 smoke/full 配置与窗口/增强/背景缓存逻辑。
+- 训练与分布诊断：每折 2000 样本（glass/gun 各600，bg 800），后期 val F1 震荡，误报集中在口腔拟声/动画枪声，提示硬负样本覆盖不足。
+
+### 项目状态（宏观→微观）
+- 宏观：Capstone Sprint #3 持续收敛，数据管线与多标签基建稳定；训练/推理/事件检测闭环可跑。
+- 数据与 meta：核心 META_FILES 仍包含 ESC50/gunshot/freesound，可用新的 `build_meta.py` 生成增补（如 glass_extra），label 规则统一为文件名前缀。
+- 特征与增强：1s/0.5s 窗、64 mel；PIPELINE_REGISTRY 原样，reverb/filter 现具随机多样性且有安全上限。
+- 训练现状：K 折中期达到较高 F1，后期震荡；正:负约 60:40，背景硬负样本（口腔爆破/动画拟声枪声）缺失导致误报。
+
+### 本次完成
+1. `data/meta/build_meta.py`：参数化 base-dir/output/source，移除固定 label 选项，label 固定为文件名前缀，默认 output/source 用目录名。
+2. 增强优化：`src/augment.py` 中 reverb（随机 delay 20–70ms、decay 0.2–0.5、wet_mix 25–35%）与 filter（随机低/高/带通，截止频限幅，最小带宽约束）随机化，接口兼容。
+3. Notebook 透视：确认 `prepare_clean.ipynb` 关键阶段（meta→抽样→分折→窗口→增强→背景→缓存/QA），smoke 配额 glass/gun 各10、bg 20，full 输出 `cache/mel64/mel64_multi`。
+4. 训练/分布诊断：每折 2000 样本，后期 val F1 上下波动；误报集中在 K/S/“突突突”/动画枪声，推断硬负样本缺失及背景偏少。
+
+### 开发思路与关键改动
+- Meta 工具：痛点（新增音频需快速纳管、无需手写标签）→ 方案（参数化脚本，label 固定为文件名前缀）→ 结果（任意目录一键生成 CSV，直接加入 META_FILES）。
+- 增强随机化：痛点（固定 reverb/filter 分布单一或削频过重）→ 方案（受控随机且限幅）→ 结果（多样性提升且不过度失真，pipeline 透明受益）。
+- 训练诊断：观察曲线中期最优后震荡，结合误报案例，推断硬负样本缺失与背景偏少 → 方案（补硬负样本、适度提高背景、收紧 early stopping）。
+
+### Insight / 巧思
+- 统一 label 规则到“文件名前缀”减少配置歧义，适合小批量增补。
+- 随机化用“限幅 + 随机”而非放大强度，保持鲁棒性同时不脱离真实分布。
+- 将误报现象直接映射为“数据覆盖空洞”，比盲目调模型更高效。
+
+### 使用示例 / 测试
+- 生成 meta：`python3 data/meta/build_meta.py --base-dir data/freesound_glass_extra`（输出 `data/meta/freesound_glass_extra.csv`，source=目录名，label=文件名前缀）。
+- 轻量验证增强（需 numpy）：随机波形调用 `apply_simple_reverb/apply_simple_filter`，检查长度不变、数值有限。
+- Prepare smoke：glass/gun 各10、bg 20，输出 `cache/mel64/mel64_smoke_multi`；full 输出 `cache/mel64/mel64_multi`。
+
+### TODO / Improvements（继承）
+- 补充硬负样本：口腔爆破/擦音拟声、动画/游戏枪声；背景总量提高到接近正类，覆盖易混类别。
+- 调整 base:aug 比例至 1:2~1:4，避免增强淹没少量 base；如增背景，重新标定 class weight/阈值。
+- 收紧 early stopping/epoch 上限，针对含硬负样本的验证集重标定阈值（含滑窗平滑）。
+- 如追加新 meta，更新 `config.META_FILES` 并重建 cache/index 后再全量复训。

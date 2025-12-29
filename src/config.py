@@ -21,12 +21,14 @@ META_FILES = [
     DATA_ROOT / "meta" / "esc50.csv",
     DATA_ROOT / "meta" / "gunshot_kaggle.csv",
     DATA_ROOT / "meta" / "freesound.csv",
+    DATA_ROOT / "meta" / "freesound_glass_extra.csv",
 ]
 # Optional raw audio roots by source key; used when filepath is missing.
 RAW_AUDIO_ROOTS = {
     "esc50": DATA_ROOT / "esc50",
     "gunshot_kaggle": DATA_ROOT / "gunshot_kaggle",
     "freesound": DATA_ROOT / "freesound",
+    "freesound": DATA_ROOT / "freesound_glass_extra",
 }
 # Legacy single-file paths kept for backward compatibility (prefer META_FILES/RAW_AUDIO_ROOTS).
 AUDIO_DIR = DATA_ROOT / "audio"
