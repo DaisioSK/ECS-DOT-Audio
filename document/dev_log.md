@@ -960,3 +960,42 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 调整 base:aug 比例至 1:2~1:4，避免增强淹没少量 base；如增背景，重新标定 class weight/阈值。
 - 收紧 early stopping/epoch 上限，针对含硬负样本的验证集重标定阈值（含滑窗平滑）。
 - 如追加新 meta，更新 `config.META_FILES` 并重建 cache/index 后再全量复训。
+
+## 2025-12-30 09:26:28Z
+### 大图位置 / Sprint
+- Capstone: Edge Audio Event Detection；Sprint: 数据准备与增广稳定性回归；Tasks: 单次分窗缓存、fold rebalance、增广去重、背景混音兼容、日志化调试。
+
+### TL;DR
+- 统一分窗到 ALL_WINS，一次切窗全程复用；glass/gun rebalance 同步到缓存；增广按折即时写 base+aug，强制 fold_id 不漂移；修复背景混音对 list/bg_pool 的兼容；加入逐折日志便于定位偏差。
+
+### 项目状态认知
+- 数据：glass hop=0.25 生效，ALL_WINS 缓存覆盖正类+背景；rebalance 后 fold 分布平衡，clip/fold 同步。
+- 增广：按任务写入 base+增广，fold 层隔离，目标 300/300；日志显示流程可控。
+- 风险：若重新运行部分单元仍可能残留旧 aug_df 观感差，需全流程顺序执行；背景混音依赖 bg_pool/list，已兼容但需保持 ALL_WINS 有背景。
+
+### 本次达成
+- 分窗/缓存：ALL_WINS 单切复用，确保 hop 覆盖生效并减少重复计算。
+- Rebalance：glass/gun 按窗口数平衡，更新 folded_df 与 ALL_WINS 的 fold_id。
+- 增广流水线：重写为 per-task base+aug，一次写入并强制 fold_id=当前折，避免跨折污染；增广日志细化。
+- 背景混音：sample_bg_chunk 兼容 DataFrame 与预切 list。
+- 调试可视化：保留原 QA 波形/Mel/试听单元，改用缓存窗口。
+
+### 开发思路与关键改动（为何这么做）
+- 痛点：多处 generate_aligned_windows 重复切窗、参数漂移 → 方案：ALL_WINS 单次切窗缓存，后续全引用 → 效果：窗口数稳定、hop 覆盖一致，调试透明。
+- 痛点：rebalance 后缓存 fold_id 不一致 → 方案：rebalance 同步更新 folded_df 与 ALL_WINS 记录 → 效果：增广 fold 归属正确。
+- 痛点：增广计数跨折污染 → 方案：按任务即时写 base+aug，remaining 只看本折本类，强制 fold_id 设置 → 效果：每折总量对齐目标。
+- 痛点：背景混音源类型不一致 → 方案：sample_bg_chunk 兼容 DF/list，缺背景时返回 None → 效果：混音稳健。
+
+### Insights / 巧思
+- 将“切窗”与“增广”解耦：一次切窗缓存 + 后续复用，减少隐藏状态。
+- 日志前置：逐折 base/aug/total_now 打印，比事后 pivot 排查更直观。
+- fold_id 硬覆盖：增广结果以当前折为准，防止源 row 的旧 fold_id 污染。
+
+### 典型使用 / 测试
+- 流程：重启内核后依次运行：配置→ALL_WINS→rebalance→tasks_pos→正类增广（含日志）→背景任务/增广→训练。
+- 快速 sanity：查看增广单元日志与 `pivot`，应为每折 glass 300、gun 300，总 600/折。
+
+### TODO / Improvements（继承）
+- 监控：在 pivot 前加入按 fold/label 的 sanity print（已留），持续检查分布。
+- 背景：确保 ALL_WINS 中背景数量充足，否则混音退化为 None；可追加硬背景。
+- 性能：有需要可将 ALL_WINS 缓存下盘，避免重复切窗；增广轮次可参数化配额。 

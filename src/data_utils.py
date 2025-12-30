@@ -366,7 +366,8 @@ def generate_aligned_windows(row: pd.Series,
                              trim_min_keep_seconds: float = 0.0,
                              debug: bool = False,
                              label_params: Dict[str, Dict[str, float]] | None = None,
-                             debug_sink: list | None = None) -> List[np.ndarray]:
+                             debug_sink: list | None = None,
+                             window_hop: float | None = None) -> List[np.ndarray]:
     """Generate windows aligned to label semantics with full debug logging.
 
     Logs every candidate (and trimmed regions) to debug_sink with keys:
@@ -411,7 +412,8 @@ def generate_aligned_windows(row: pd.Series,
     y_trim = y_raw[lead_trim:orig_len - tail_trim] if (lead_trim or tail_trim) else y_raw
 
     window_len = int(WINDOW_SECONDS * sr)
-    hop_len = int(WINDOW_HOP * sr)
+    hop_used = window_hop if window_hop is not None else WINDOW_HOP
+    hop_len = int(hop_used * sr)
 
     def log_entry(start_sec, end_sec, status, reason, peak_ratio=None, peak_position=None):
         if debug_sink is None:
@@ -427,7 +429,7 @@ def generate_aligned_windows(row: pd.Series,
 
     # Log overall info and trimmed regions.
     log_entry(None, None, "info",
-              f"len_raw={orig_len/sr:.3f}s len_trim={len(y_trim)/sr:.3f}s lead_trim={lead_trim/sr:.3f}s tail_trim={tail_trim/sr:.3f}s window={WINDOW_SECONDS}s hop={WINDOW_HOP}s")
+              f"len_raw={orig_len/sr:.3f}s len_trim={len(y_trim)/sr:.3f}s lead_trim={lead_trim/sr:.3f}s tail_trim={tail_trim/sr:.3f}s window={WINDOW_SECONDS}s hop={hop_used}s")
     if lead_trim > 0:
         log_entry(0.0, lead_trim / sr, "remove", "silent_trim_head")
     if tail_trim > 0:
@@ -437,7 +439,7 @@ def generate_aligned_windows(row: pd.Series,
 
     if label in align_labels:
         energy_global = float(np.max(y_trim ** 2) + 1e-8)
-        for idx, (win, start_trim) in enumerate(_iter_windows(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP)):
+        for idx, (win, start_trim) in enumerate(_iter_windows(y_trim, sr, WINDOW_SECONDS, hop_used)):
             start_sec = (lead_trim + start_trim) / sr
             end_sec = start_sec + WINDOW_SECONDS
             energy = win ** 2
@@ -471,8 +473,8 @@ def generate_aligned_windows(row: pd.Series,
                 windows.append(win)
                 break
     else:
-        mask = _energy_mask(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP, energy_thr)
-        for idx, (win, start_trim) in enumerate(_iter_windows(y_trim, sr, WINDOW_SECONDS, WINDOW_HOP)):
+        mask = _energy_mask(y_trim, sr, WINDOW_SECONDS, hop_used, energy_thr)
+        for idx, (win, start_trim) in enumerate(_iter_windows(y_trim, sr, WINDOW_SECONDS, hop_used)):
             start_sec = (lead_trim + start_trim) / sr
             end_sec = start_sec + WINDOW_SECONDS
             status = "keep"

@@ -21,14 +21,16 @@ META_FILES = [
     DATA_ROOT / "meta" / "esc50.csv",
     DATA_ROOT / "meta" / "gunshot_kaggle.csv",
     DATA_ROOT / "meta" / "freesound.csv",
-    DATA_ROOT / "meta" / "freesound_glass_extra.csv",
+    DATA_ROOT / "meta" / "sound_extra.csv",
+    DATA_ROOT / "meta" / "background_catergorized.csv",
 ]
 # Optional raw audio roots by source key; used when filepath is missing.
 RAW_AUDIO_ROOTS = {
     "esc50": DATA_ROOT / "esc50",
     "gunshot_kaggle": DATA_ROOT / "gunshot_kaggle",
     "freesound": DATA_ROOT / "freesound",
-    "freesound": DATA_ROOT / "freesound_glass_extra",
+    "sound_extra": DATA_ROOT / "sound_extra",
+    "background_catergorized": DATA_ROOT / "background_catergorized",
 }
 # Legacy single-file paths kept for backward compatibility (prefer META_FILES/RAW_AUDIO_ROOTS).
 AUDIO_DIR = DATA_ROOT / "audio"
@@ -72,6 +74,13 @@ WINDOW_PARAMS = {
         "energy_threshold": 0.15,
         "extra_shifts": [0.0],
     },
+}
+
+# Optional per-label hop override for windowing (seconds).
+# If a label is present here, use this hop_seconds instead of the global WINDOW_HOP.
+WINDOW_HOP_OVERRIDE = {
+    "glass": 0.25,
+    # "gunshot": 0.5,
 }
 
 # Label configuration

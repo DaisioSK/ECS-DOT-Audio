@@ -10,7 +10,7 @@ from .config import NUM_CLASSES
 
 class TinyGlassNet(nn.Module):
     """Compact CNN with only Conv/Pool/ReLU/FC blocks."""
-    def __init__(self, in_channels: int = 1, base_channels: int = 24, num_classes: int = 2, dropout_p: float = 0.1):
+    def __init__(self, in_channels: int = 1, base_channels: int = 16, num_classes: int = 2, dropout_p: float = 0.1):
         super().__init__()
         c1, c2, c3 = base_channels, base_channels * 2, base_channels * 4
         self.features = nn.Sequential(

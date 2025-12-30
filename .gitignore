@@ -6,3 +6,8 @@ data/**/*.mp3
 **/.ipynb_checkpoints/
 **/__pycache__
 /backup
+/cache_*
+
+*.zip
+data/sound_extra/
+data/voice/
