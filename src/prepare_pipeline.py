@@ -185,7 +185,17 @@ def cache_windows_to_mel_index(
 
         out_dir = cache_dir / main_label / f"fold{fold}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        cache_path = out_dir / f"{clip_id}_{window_id}.npy"
+        # 将 pipeline/device 编入文件名，防止增广覆盖
+        pipeline_tag = row.get("pipeline", "base")
+        device_tag = row.get("device", None)
+        fname_parts = [clip_id, window_id]
+        if device_tag and device_tag != "none":
+            fname_parts.append(str(device_tag))
+        if pipeline_tag and pipeline_tag != "base":
+            fname_parts.append(str(pipeline_tag).replace("+", "_"))
+        # 加入唯一索引，避免同一 window 同一 pipeline 多次写盘互相覆盖
+        fname_parts.append(f"{idx}")
+        cache_path = out_dir / ("_".join(fname_parts) + ".npy")
         np.save(cache_path, mel.astype(np.float32, copy=False) if save_float32 else mel)
 
         records.append(

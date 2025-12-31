@@ -999,3 +999,42 @@ make -f env.mk notebook   # 容器内打开 case_study.ipynb
 - 监控：在 pivot 前加入按 fold/label 的 sanity print（已留），持续检查分布。
 - 背景：确保 ALL_WINS 中背景数量充足，否则混音退化为 None；可追加硬背景。
 - 性能：有需要可将 ALL_WINS 缓存下盘，避免重复切窗；增广轮次可参数化配额。 
+
+## 2025-12-31 03:31:43Z
+### 大图位置 / Sprint
+- Capstone: Edge Audio Event Detection；Sprint: prepare 增广均匀化 + 训练调度调优；Tasks: 增广覆盖均衡、防止缓存覆盖、cosine+warmup 调度、训练日志分析。
+
+### TL;DR
+- 增广改为按窗口均衡分配组合，穷举 win×pipeline×device 后才重复；mel 缓存文件名加入 pipeline/device+idx，避免覆盖。
+- 训练改为 AdamW + warmup+cosine，lr 初始 1e-3，eta_min 1e-4，early stop ~10 轮；性能稳定在 val F1 0.84–0.86。
+- 数据分布、pipeline/device/weapon 基本均匀，但指标瓶颈在数据/噪声而非配额；后续应优先校准阈值、抗噪损失、补硬负样本。
+
+### 项目状态（宏观→微观）
+- 数据/增广：ALL_WINS 单切复用；glass/gun 300/折；pipeline/device/weapon 均匀；每窗增广次数收敛（glass≈8–10，gun≈3–4）。
+- 缓存：mel 文件名含 pipeline/device/行号，window_index 路径唯一；不再出现增广覆盖。
+- 训练：cosine+warmup 调度，train≈val；loss ~0.17，F1 ~0.84–0.86，已进入平台。
+
+### 本次达成
+- 增广调度：穷举组合后重复，动态放宽 per-window cap，均衡窗口和组合分配；新增分布检查（pipeline×device、clip×fold、per-window counts）。
+- 缓存修复：写盘文件名加入 pipeline/device+idx，避免增广覆盖 base。
+- 训练调度：替换 ReduceLROnPlateau 为 warmup+cosine（T_max≈EPOCHS-5, eta_min=1e-4），lr=1e-3，early stop ~10 轮。
+
+### 关键改动与原因
+- 痛点：增广覆盖不均、窗口重复高 → 方案：按窗口均匀循环组合，穷举后再重复，动态 cap → 效果：pipeline/weapon/device 均衡，per-window 重复收敛。
+- 痛点：mel 覆盖 → 方案：文件名包含 pipeline/device/idx → 效果：增广样本真实落盘，与 index 对齐。
+- 痛点：调度震荡 → 方案：warmup+cosine 平滑衰减 → 效果：收敛更稳，性能与旧版持平。
+
+### Insights / 巧思
+- 先“覆盖空间再重复”+动态放宽 cap，比纯随机更稳；配合分布检查快速定位偏差。
+- 缓存命名必须包含增广身份，否则统计均匀也会被覆盖。
+- 训练瓶颈更多在数据噪声/覆盖，调度改良收益有限，应关注阈值/抗噪损失/硬负样本。
+
+### 使用/测试示例
+- Prepare：重启→配置→ALL_WINS→rebalance→tasks_pos→增广单元（带日志与分布检查）→cache（mel64 写入唯一文件名）。
+- 训练：按新调度跑 k-fold，观察 val F1 顶点（~0.84–0.86），必要时调阈值/后处理。
+
+### TODO / Improvements
+- 阈值/校准：验证集扫阈值或温度标定，提升实用 F1。
+- 抗噪损失：尝试 label smoothing（~0.05）或 focal (γ≈1.5)，压低噪声样本对 loss 的拉升。
+- 调度微调：warmup 缩短到 2–3，eta_min 调低；或改回 plateau+短 patience 做对照。
+- 数据：补充硬背景/拟声/动漫枪声等易混样本，可能比调度更有效。 
